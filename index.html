@@ -65,6 +65,10 @@
   <p id="periodoResumen" class="period-summary muted" role="status" aria-live="polite"></p>
   <div id="grid" class="grid"></div>
   <p id="vacio" class="muted empty" hidden></p>
+  <footer class="quick-payment-footer">
+    <p class="payment-rule">Para establecer una miniatura como pagada, el diseñador y el encargado deben confirmar el pago desde sus cuentas.</p>
+    <button id="btnPagoRapido" class="btn primary" type="button">Confirmar pagos rápido</button>
+  </footer>
 </div>
 
 <!-- DETALLE -->
@@ -96,6 +100,18 @@
       <button class="btn primary" type="submit">Guardar</button>
     </div>
   </form>
+</dialog>
+
+<dialog id="dlgPagoRapido">
+ <form id="quickForm" class="form">
+  <h2>Confirmar pagos rápido</h2>
+  <p class="muted" id="quickPeriod"></p>
+  <p class="payment-rule">Selecciona las minis cuyo pago confirmas. Solo se marcarán pagadas cuando la otra cuenta también confirme. Las que no tienen monto todavía no se pueden confirmar.</p>
+  <button id="btnQuickTodas" class="btn ghost" type="button">Seleccionar / quitar pendientes</button>
+  <div id="quickList" class="quick-payment-list"></div>
+  <p id="quickError" class="error" hidden></p>
+  <div class="actions quick-actions"><button class="btn ghost" type="button" data-cerrar>Cerrar</button><button id="btnQuickConfirmar" class="btn primary" type="submit" disabled>Confirmar seleccionadas (0)</button></div>
+ </form>
 </dialog>
 
 <dialog id="dlgPassword">

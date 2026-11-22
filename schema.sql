@@ -22,5 +22,6 @@ CREATE TABLE IF NOT EXISTS miniaturas (
 CREATE INDEX IF NOT EXISTS miniaturas_order ON miniaturas(fecha DESC,created_at DESC,id);
 CREATE TABLE IF NOT EXISTS pagos (
  miniatura_id TEXT PRIMARY KEY REFERENCES miniaturas(id) ON DELETE CASCADE, monto REAL CHECK(monto>=0),
- pagado INTEGER NOT NULL DEFAULT 0 CHECK(pagado IN(0,1)), fecha_pago TEXT, nota TEXT, updated_at TEXT NOT NULL
+ pagado INTEGER NOT NULL DEFAULT 0 CHECK(pagado IN(0,1)), fecha_pago TEXT, nota TEXT, updated_at TEXT NOT NULL,
+ confirmado_disenador_at TEXT, confirmado_encargado_at TEXT, revision INTEGER NOT NULL DEFAULT 1
 );

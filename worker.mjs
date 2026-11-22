@@ -152,10 +152,10 @@ async function api(request, env) {
  }
  if (path==='/api/miniaturas' && method==='GET') {
   const offset=Number(url.searchParams.get('offset')||0); if (!Number.isSafeInteger(offset)||offset<0) fail(400,'Página inválida.');
-  const rows=(await env.DB.prepare('SELECT m.*,p.monto,p.pagado,p.fecha_pago,p.nota,p.updated_at FROM miniaturas m LEFT JOIN pagos p ON p.miniatura_id=m.id ORDER BY m.fecha DESC,m.created_at DESC,m.id LIMIT 201 OFFSET ?').bind(offset).all()).results;
+  const rows=(await env.DB.prepare('SELECT m.*,p.monto,p.pagado,p.fecha_pago,p.nota,p.updated_at,p.confirmado_disenador_at,p.confirmado_encargado_at,p.revision FROM miniaturas m LEFT JOIN pagos p ON p.miniatura_id=m.id ORDER BY m.fecha DESC,m.created_at DESC,m.id LIMIT 201 OFFSET ?').bind(offset).all()).results;
   const more=rows.length>200; const data=rows.slice(0,200).map(row=>{
-   const {monto,pagado,fecha_pago,nota,updated_at,...m}=row;
-   return {...m,pagos:updated_at?{monto,pagado:!!pagado,fecha_pago,nota,updated_at}:null};
+   const {monto,pagado,fecha_pago,nota,updated_at,confirmado_disenador_at,confirmado_encargado_at,revision,...m}=row;
+   return {...m,pagos:updated_at?{monto,pagado:monto!=null && !!confirmado_disenador_at && !!confirmado_encargado_at,fecha_pago,nota,updated_at,confirmado_disenador_at,confirmado_encargado_at,revision}:null};
   });
   return json({data,nextOffset:more?offset+200:null});
  }
@@ -170,13 +170,49 @@ async function api(request, env) {
    env.DB.prepare('DELETE FROM images WHERE id=? AND NOT EXISTS(SELECT 1 FROM miniaturas WHERE imagen_path=?)').bind(m.imagen_path,m.imagen_path)
   ]); return json({ok:true});
  }
+ if (path==='/api/pagos/confirmar' && method==='POST') {
+  if (!['disenador','encargado'].includes(u.rol)) fail(403,'Tu cuenta no puede confirmar pagos.');
+  const b=await bodyJson(request);
+  if (!Array.isArray(b.items) || b.items.length<1 || b.items.length>40 || typeof b.confirmed!=='boolean') fail(400,'Selecciona entre 1 y 40 miniaturas.');
+  const ids=new Set(); const params=[];
+  for (const item of b.items) {
+   if (!item || typeof item.id!=='string' || !/^[a-f0-9-]{36}$/.test(item.id) || !Number.isSafeInteger(item.revision) || item.revision<1 || ids.has(item.id)) fail(400,'Selección de pagos inválida.');
+   ids.add(item.id); params.push(item.id,item.revision);
+  }
+  const own=u.rol==='disenador'?'confirmado_disenador_at':'confirmado_encargado_at';
+  const other=u.rol==='disenador'?'confirmado_encargado_at':'confirmado_disenador_at';
+  const values=b.items.map(()=>'(?,?)').join(','); const now=new Date().toISOString();
+  // One statement validates every revision and applies the whole selection atomically.
+  // The authenticated role selects the column; an administrator cannot confirm for the other account.
+  const result=await env.DB.prepare(`WITH expected(id,version) AS (VALUES ${values})
+   UPDATE pagos SET ${own}=CASE WHEN ?=1 THEN ? ELSE NULL END,
+    pagado=CASE WHEN ?=1 AND ${other} IS NOT NULL AND monto IS NOT NULL THEN 1 ELSE 0 END,updated_at=?
+   WHERE miniatura_id IN(SELECT id FROM expected) AND NOT EXISTS(
+    SELECT 1 FROM expected e LEFT JOIN pagos p ON p.miniatura_id=e.id
+    WHERE p.revision IS NULL OR p.revision<>e.version OR p.monto IS NULL
+   )`).bind(...params,b.confirmed?1:0,now,b.confirmed?1:0,now).run();
+  if (result.meta.changes!==b.items.length) fail(409,'Algún pago cambió o todavía no tiene monto. Actualiza la lista y vuelve a seleccionar.');
+  return json({ok:true,count:b.items.length});
+ }
  const pay=path.match(/^\/api\/miniaturas\/([a-f0-9-]{36})\/pago$/);
  if (pay && method==='PUT') {
-  requireRole(u,'encargado'); const b=await bodyJson(request);
-  if (typeof b.monto!=='number' || !Number.isFinite(b.monto)||b.monto<0||b.monto>999999999 || typeof b.pagado!=='boolean') fail(400,'Monto o estado inválido.');
+  if (u.rol!=='encargado' && !u.is_admin) fail(403,'Solo el encargado o administrador puede establecer el monto.');
+  const b=await bodyJson(request);
+  if (typeof b.monto!=='number' || !Number.isFinite(b.monto)||b.monto<0||b.monto>999999999) fail(400,'Monto inválido.');
+  if (b.revision!=null && (!Number.isSafeInteger(b.revision)||b.revision<1)) fail(400,'Versión de pago inválida.');
   const fecha=date(b.fecha_pago,'Fecha de pago'), nota=text(b.nota,'Nota',5000);
   if (!await env.DB.prepare('SELECT id FROM miniaturas WHERE id=?').bind(pay[1]).first()) fail(404,'La miniatura no existe.');
-  await env.DB.prepare('INSERT INTO pagos(miniatura_id,monto,pagado,fecha_pago,nota,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(miniatura_id) DO UPDATE SET monto=excluded.monto,pagado=excluded.pagado,fecha_pago=excluded.fecha_pago,nota=excluded.nota,updated_at=excluded.updated_at').bind(pay[1],Math.round(b.monto*100)/100,b.pagado?1:0,fecha,nota,new Date().toISOString()).run();
+  const changed='pagos.monto IS NOT excluded.monto OR pagos.fecha_pago IS NOT excluded.fecha_pago';
+  const result=await env.DB.prepare(`INSERT INTO pagos(miniatura_id,monto,pagado,fecha_pago,nota,updated_at)
+   SELECT ?,?,0,?,?,? WHERE (? IS NULL AND NOT EXISTS(SELECT 1 FROM pagos WHERE miniatura_id=?))
+    OR EXISTS(SELECT 1 FROM pagos WHERE miniatura_id=? AND revision=?)
+   ON CONFLICT(miniatura_id) DO UPDATE SET monto=excluded.monto,fecha_pago=excluded.fecha_pago,nota=excluded.nota,updated_at=excluded.updated_at,
+    confirmado_disenador_at=CASE WHEN ${changed} THEN NULL ELSE pagos.confirmado_disenador_at END,
+    confirmado_encargado_at=CASE WHEN ${changed} THEN NULL ELSE pagos.confirmado_encargado_at END,
+    pagado=CASE WHEN ${changed} THEN 0 ELSE pagos.pagado END,
+    revision=CASE WHEN ${changed} THEN pagos.revision+1 ELSE pagos.revision END
+   WHERE pagos.revision=?`).bind(pay[1],Math.round(b.monto*100)/100,fecha,nota,new Date().toISOString(),b.revision??null,pay[1],pay[1],b.revision??null,b.revision??null).run();
+  if (!result.meta.changes) fail(409,'El pago cambió en la otra cuenta. Actualiza la miniatura antes de guardar.');
   return json({ok:true});
  }
  const image=path.match(/^\/api\/images\/([a-f0-9-]{36})$/);

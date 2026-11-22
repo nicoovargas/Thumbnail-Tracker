@@ -18,3 +18,7 @@ export function monthLabel(month) {
   const [year, number] = month.split('-').map(Number);
   return new Date(year, number - 1, 1).toLocaleDateString('es-MX', {month:'long',year:'numeric'});
 }
+
+export function lastDayOfMonth(now = new Date()) {
+  return localDateKey(new Date(now.getFullYear(), now.getMonth() + 1, 0));
+}

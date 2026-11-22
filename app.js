@@ -1,4 +1,4 @@
-import {localDateKey, selectedMonth, matchesMonth, monthLabel} from './period-filter.mjs';
+import {localDateKey, selectedMonth, matchesMonth, monthLabel, lastDayOfMonth} from './period-filter.mjs';
 
 async function api(path, options = {}) {
   const init = { credentials: 'same-origin', ...options };
@@ -13,12 +13,12 @@ async function api(path, options = {}) {
       document.querySelectorAll('dialog[open]').forEach(d => d.close());
       mostrarLogin();
     }
-    throw new Error(data.error || 'No se pudo completar la solicitud.');
+    throw Object.assign(new Error(data.error || 'No se pudo completar la solicitud.'), {status:response.status});
   }
   return data;
 }
 const $ = s => document.querySelector(s);
-let user = null, rol = null, items = [], verLista = [];
+let user = null, rol = null, items = [], verLista = [], cargando = false;
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money = n => '$' + Number(n || 0).toLocaleString('es-MX', { maximumFractionDigits: 2 });
@@ -27,6 +27,15 @@ const imgUrl = p => p ? '/api/images/' + encodeURIComponent(p) : '';
 const fmtFecha = f => f ? new Date(f + 'T00:00:00').toLocaleDateString('es-MX', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
 const estado = m => { const p = pagoDe(m); if (!p || p.monto == null) return 'sinprecio'; return p.pagado ? 'pagada' : 'pendiente'; };
 const ETIQ = { pagada: 'Pagada', pendiente: 'Por cobrar', sinprecio: 'Sin precio' };
+const miConfirmacion = p => !!(rol === 'disenador' ? p?.confirmado_disenador_at : p?.confirmado_encargado_at);
+function estadoConfirmacion(p) {
+  if (!p || p.monto == null) return 'Primero establece el monto';
+  if (p.pagado) return 'Pagada · confirmada por ambos';
+  if (miConfirmacion(p)) return 'Confirmaste · falta la otra cuenta';
+  if (p.confirmado_disenador_at || p.confirmado_encargado_at) return 'Falta tu confirmación';
+  return 'Falta la confirmación de ambos';
+}
+
 
 /* ---------- sesión ---------- */
 async function iniciar() {
@@ -77,6 +86,8 @@ function mostrarError(sel, msg) { const el = $(sel); el.textContent = msg; el.hi
 
 /* ---------- datos ---------- */
 async function cargar() {
+  if (cargando || !user) return;
+  cargando = true;
   try {
     const all = []; let offset = 0;
     do {
@@ -86,7 +97,7 @@ async function cargar() {
     items = all;
   } catch (error) {
     $('#vacio').hidden = false; $('#vacio').textContent = 'No se pudieron cargar las miniaturas: ' + error.message; return;
-  }
+  } finally { cargando = false; }
   const clientes = [...new Set(items.map(m => m.cliente))].sort((a, b) => a.localeCompare(b));
   const sel = $('#fCliente'), actual = sel.value;
   sel.innerHTML = '<option value="">Todos los clientes</option>' + clientes.map(c => `<option>${esc(c)}</option>`).join('');
@@ -128,7 +139,8 @@ function pintar() {
       <img class="thumb" loading="lazy" src="${esc(imgUrl(m.imagen_path))}" alt="">
       <div class="info"><h3>${esc(m.titulo)}</h3>
         <div class="meta"><span>${esc(m.cliente)}</span>
-        <span class="badge ${s}">${s === 'sinprecio' ? ETIQ[s] : money(p.monto)}</span></div></div></button>`;
+        <span class="badge ${s}">${s === 'sinprecio' ? ETIQ[s] : money(p.monto)}</span></div>
+        <span class="payment-stage">${estadoConfirmacion(p)}</span></div></button>`;
   }).join('');
   const vacio = $('#vacio');
   vacio.hidden = verLista.length > 0;
@@ -146,18 +158,18 @@ $('#grid').addEventListener('click', e => { const c = e.target.closest('.card');
 function abrirDetalle(id) {
   const m = items.find(x => x.id === id); if (!m) return;
   const p = pagoDe(m) || {};
-  const esEnc = rol === 'encargado';
-  const pagoHtml = esEnc ? `
+  const puedeEditarPago = rol === 'encargado' || user.is_admin;
+  const pagoHtml = puedeEditarPago ? `
     <form class="pago" id="formPago">
       <h3>Pago</h3>
       <div class="row">
         <label>Monto <input type="number" name="monto" min="0" step="0.01" inputmode="decimal" value="${p.monto ?? ''}" required></label>
-        <label>Fecha de pago <input type="date" name="fecha_pago" value="${p.fecha_pago ?? ''}"></label>
+        <label>Fecha de pago <input type="date" name="fecha_pago" value="${p.fecha_pago || lastDayOfMonth()}"></label>
       </div>
-      <label class="check"><input type="checkbox" name="pagado" ${p.pagado ? 'checked' : ''}> Ya está pagada</label>
+      <p class="muted">Guardar el monto no confirma el pago. La fecha sugerida es el último día de este mes y puedes cambiarla.</p>
       <label>Nota <small class="muted">(opcional)</small> <textarea name="nota" rows="2">${esc(p.nota)}</textarea></label>
       <p class="error" id="pagoError" hidden></p>
-      <div class="actions"><span class="spacer"></span><button class="btn ghost" type="button" data-cerrar>Cerrar</button><button class="btn primary" type="submit">Guardar pago</button></div>
+      <div class="actions"><span class="spacer"></span><button class="btn ghost" type="button" data-cerrar>Cerrar</button><button class="btn primary" type="submit">Guardar monto y fecha</button></div>
     </form>` : `
     <div class="pago"><h3>Pago</h3>
       <dl class="facts">
@@ -167,7 +179,6 @@ function abrirDetalle(id) {
       </dl>
       ${p.nota ? `<div><small class="muted">Nota</small><br>${esc(p.nota)}</div>` : ''}
       <div class="actions"><span class="spacer"></span>
-        ${rol === 'disenador' ? '<button class="btn" type="button" id="btnEditar">Editar miniatura</button>' : ''}
         <button class="btn ghost" type="button" data-cerrar>Cerrar</button></div>
     </div>`;
   $('#detalle').innerHTML = `
@@ -179,23 +190,117 @@ function abrirDetalle(id) {
       ${m.link_video ? `<div><dt>Video</dt><dd><a href="${esc(m.link_video)}" target="_blank" rel="noopener">Abrir en YouTube</a></dd></div>` : ''}
     </dl>
     ${m.notas ? `<div><small class="muted">Notas del diseñador</small><br>${esc(m.notas)}</div>` : ''}
-    ${pagoHtml}`;
+    ${pagoHtml}
+    <section class="pago confirmation-panel">
+      <h3>Confirmación del pago</h3>
+      <p class="payment-rule">Solo aparece como pagada cuando ambas cuentas confirman el mismo monto y fecha.</p>
+      <dl class="facts"><div><dt>Monto guardado</dt><dd>${p.monto != null ? money(p.monto) : 'Sin monto'}</dd></div><div><dt>Fecha guardada</dt><dd>${fmtFecha(p.fecha_pago)}</dd></div></dl>
+      <div class="confirmation-states"><span>Diseñador: <b>${p.confirmado_disenador_at ? 'Confirmó' : 'Pendiente'}</b></span><span>Encargado: <b>${p.confirmado_encargado_at ? 'Confirmó' : 'Pendiente'}</b></span></div>
+      <p>${estadoConfirmacion(p)}</p>
+      <p id="confirmSaveFirst" class="muted" hidden>Guarda el monto y la fecha antes de confirmar.</p>
+      <p id="confirmError" class="error" hidden></p>
+      ${rol === 'disenador' ? '<button class="btn" type="button" id="btnEditar">Editar miniatura</button>' : ''}
+      <button id="btnConfirmarMini" class="btn ${miConfirmacion(p) ? 'ghost' : 'primary'}" type="button" ${p.monto == null ? 'disabled' : ''}>${miConfirmacion(p) ? 'Retirar mi confirmación' : 'Confirmar mi parte del pago'}</button>
+    </section>`;
   $('#dlgDetalle').showModal();
   $('#btnEditar')?.addEventListener('click', () => { $('#dlgDetalle').close(); abrirForm(m); });
+  const paymentForm = $('#formPago');
+  if (paymentForm) {
+    const initial = JSON.stringify(Object.fromEntries(new FormData(paymentForm)));
+    const confirmationButton = $('#btnConfirmarMini');
+    const suggestedDateNotSaved = p.monto != null && !p.fecha_pago;
+    function revisarCambiosPago() {
+      const dirty = suggestedDateNotSaved || JSON.stringify(Object.fromEntries(new FormData(paymentForm))) !== initial;
+      confirmationButton.disabled = p.monto == null || dirty;
+      $('#confirmSaveFirst').hidden = !dirty;
+    }
+    paymentForm.addEventListener('input', revisarCambiosPago);
+    revisarCambiosPago();
+  }
   $('#formPago')?.addEventListener('submit', async e => {
     e.preventDefault();
     const f = e.target, btn = f.querySelector('[type=submit]');
     btn.disabled = true;
     try {
       await api('/miniaturas/' + m.id + '/pago', {method:'PUT', body:{
-        monto: +f.monto.value, pagado: f.pagado.checked,
+        monto: +f.monto.value, revision: p.revision ?? null,
         fecha_pago: f.fecha_pago.value || null, nota: f.nota.value.trim() || null
       }});
       $('#dlgDetalle').close(); await cargar();
-    } catch (error) { mostrarError('#pagoError', 'No se pudo guardar: ' + error.message); }
+    } catch (error) {
+      if (error.status === 409) { $('#dlgDetalle').close(); await cargar(); alert(error.message); }
+      else mostrarError('#pagoError', 'No se pudo guardar: ' + error.message);
+    }
     finally { btn.disabled = false; }
   });
+  $('#btnConfirmarMini').addEventListener('click', async e => {
+    const btn = e.target; btn.disabled = true; $('#confirmError').hidden = true;
+    try {
+      await api('/pagos/confirmar', {method:'POST', body:{items:[{id:m.id,revision:p.revision}],confirmed:!miConfirmacion(p)}});
+      $('#dlgDetalle').close(); await cargar();
+    } catch(error) {
+      if (error.status === 409) { $('#dlgDetalle').close(); await cargar(); alert(error.message); }
+      else mostrarError('#confirmError',error.message);
+    } finally {btn.disabled=false;}
+  });
+
 }
+
+/* ---------- confirmación rápida ---------- */
+function contarSeleccionadas() {
+  const count = $('#quickList').querySelectorAll('input[name=miniatura]:checked:not(:disabled)').length;
+  $('#btnQuickConfirmar').disabled = count === 0;
+  $('#btnQuickConfirmar').textContent = `Confirmar seleccionadas (${count})`;
+}
+function pintarPagosRapidos() {
+  const list = verLista;
+  $('#quickPeriod').textContent = `${monthLabel(selectedMonth($('#fPeriodo').value, $('#fMes').value))} · ${list.length} miniaturas en el filtro actual`;
+  $('#quickList').innerHTML = list.length ? list.map(m => {
+    const p = pagoDe(m), own = miConfirmacion(p), disabled = p?.monto == null || own;
+    return `<label class="quick-payment-item">
+      <input type="checkbox" name="miniatura" value="${m.id}" ${own ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
+      <img src="${esc(imgUrl(m.imagen_path))}" alt="" loading="lazy">
+      <span class="quick-payment-text"><b>${esc(m.titulo)}</b><small>${esc(m.cliente)} · ${p?.monto != null ? money(p.monto) : 'Sin monto'}</small><small>${estadoConfirmacion(p)}</small></span>
+    </label>`;
+  }).join('') : '<p class="muted">No hay miniaturas en el filtro actual.</p>';
+  $('#btnQuickTodas').disabled = !$('#quickList').querySelector('input:not(:disabled)');
+  contarSeleccionadas();
+}
+$('#btnPagoRapido').addEventListener('click', async e => {
+  const btn=e.target;btn.disabled=true;
+  try {
+    await cargar(); if (!user) return;
+    $('#quickError').hidden=true; pintarPagosRapidos(); $('#dlgPagoRapido').showModal();
+  } finally {btn.disabled=false;}
+});
+$('#quickList').addEventListener('change',contarSeleccionadas);
+$('#btnQuickTodas').addEventListener('click', () => {
+  const boxes=[...$('#quickList').querySelectorAll('input:not(:disabled)')];
+  const select=boxes.some(b=>!b.checked); boxes.forEach(b=>b.checked=select); contarSeleccionadas();
+});
+$('#quickForm').addEventListener('submit', async e => {
+  e.preventDefault(); const btn=$('#btnQuickConfirmar'); btn.disabled=true;
+  $('#quickError').hidden=true; let completed=0;
+  const ids=[...$('#quickList').querySelectorAll('input[name=miniatura]:checked:not(:disabled)')].map(b=>b.value);
+  const selection=ids.map(id=>({id,revision:pagoDe(items.find(m=>m.id===id))?.revision}));
+  $('#btnQuickTodas').disabled=true; $('#quickList').querySelectorAll('input').forEach(b=>b.disabled=true);
+  try {
+    for (let start=0;start<selection.length;start+=40) {
+      const result=await api('/pagos/confirmar', {method:'POST',body:{items:selection.slice(start,start+40),confirmed:true}});
+      completed+=result.count;
+    }
+    $('#dlgPagoRapido').close(); await cargar();
+  } catch(error) {
+    await cargar(); pintarPagosRapidos();
+    mostrarError('#quickError',(completed ? `Se confirmaron ${completed} miniaturas. ` : '')+error.message);
+  } finally {contarSeleccionadas();}
+});
+function actualizarAlVolver() {
+  if (user && !document.hidden && !document.querySelector('dialog[open]')) cargar();
+}
+setInterval(actualizarAlVolver,15000);
+window.addEventListener('focus',actualizarAlVolver);
+document.addEventListener('visibilitychange',actualizarAlVolver);
 
 /* ---------- formulario de miniatura (diseñador) ---------- */
 const form = $('#form');

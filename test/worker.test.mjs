@@ -65,12 +65,55 @@ test('cuentas, permisos, imágenes y pagos',async t=>{
   const page=await (await request('/api/miniaturas',{cookie:manager})).json();assert.equal(page.data.length,1);assert.equal(page.data[0].titulo,'Miniatura de prueba');image=page.data[0].imagen_path;
   const response=await request('/api/images/'+image,{cookie:manager});assert.equal(response.headers.get('Content-Type'),'image/png');assert.deepEqual(Buffer.from(await response.arrayBuffer()),png);
  });
- await t.test('solo el encargado modifica pagos',async()=>{
-  const body={monto:150.50,pagado:true,fecha_pago:'2026-11-22',nota:'Liquidado'};
-  assert.equal((await request('/api/miniaturas/'+id+'/pago',{method:'PUT',cookie:owner,body})).status,403);
+ await t.test('el administrador o encargado establece monto sin marcar el pago como completado',async()=>{
+  const body={monto:150.50,pagado:true,fecha_pago:'2026-11-30',nota:'Pago del mes'};
   assert.equal((await request('/api/miniaturas/'+id+'/pago',{method:'PUT',cookie:manager,body:{...body,monto:-1}})).status,400);
-  assert.equal((await request('/api/miniaturas/'+id+'/pago',{method:'PUT',cookie:manager,body})).status,200);
-  const row=(await (await request('/api/miniaturas',{cookie:owner})).json()).data[0];assert.equal(row.pagos.pagado,true);assert.equal(row.pagos.monto,150.5);
+  assert.equal((await request('/api/miniaturas/'+id+'/pago',{method:'PUT',cookie:owner,body})).status,200);
+  const row=(await (await request('/api/miniaturas',{cookie:owner})).json()).data[0];
+  assert.equal(row.pagos.pagado,false);assert.equal(row.pagos.monto,150.5);assert.equal(row.pagos.revision,1);
+ });
+ await t.test('ni el administrador puede confirmar por la otra cuenta',async()=>{
+  const body={items:[{id,revision:1}],confirmed:true,role:'encargado',confirmado_encargado_at:'forged'};
+  for(let i=0;i<2;i++)assert.equal((await request('/api/pagos/confirmar',{method:'POST',cookie:owner,body})).status,200);
+  const p=(await (await request('/api/miniaturas',{cookie:manager})).json()).data[0].pagos;
+  assert.ok(p.confirmado_disenador_at);assert.equal(p.confirmado_encargado_at,null);assert.equal(p.pagado,false);
+ });
+ await t.test('solo con ambas confirmaciones se paga; retirar una lo devuelve a pendiente',async()=>{
+  const body={items:[{id,revision:1}],confirmed:true};
+  assert.equal((await request('/api/pagos/confirmar',{method:'POST',cookie:manager,body})).status,200);
+  assert.equal((await (await request('/api/miniaturas',{cookie:owner})).json()).data[0].pagos.pagado,true);
+  assert.equal((await request('/api/pagos/confirmar',{method:'POST',cookie:owner,body:{...body,confirmed:false}})).status,200);
+  const p=(await (await request('/api/miniaturas',{cookie:owner})).json()).data[0].pagos;
+  assert.equal(p.pagado,false);assert.equal(p.confirmado_disenador_at,null);assert.ok(p.confirmado_encargado_at);
+  assert.equal((await request('/api/pagos/confirmar',{method:'POST',cookie:owner,body})).status,200);
+ });
+ await t.test('cambiar monto o fecha exige dos confirmaciones nuevas y rechaza versiones anteriores',async()=>{
+  const base={monto:150.5,fecha_pago:'2026-11-30',nota:'Nota actualizada',revision:1};
+  assert.equal((await request('/api/miniaturas/'+id+'/pago',{method:'PUT',cookie:manager,body:base})).status,200);
+  let p=(await (await request('/api/miniaturas',{cookie:owner})).json()).data[0].pagos;assert.equal(p.pagado,true);assert.equal(p.revision,1);
+  assert.equal((await request('/api/miniaturas/'+id+'/pago',{method:'PUT',cookie:manager,body:{...base,monto:200}})).status,200);
+  p=(await (await request('/api/miniaturas',{cookie:owner})).json()).data[0].pagos;
+  assert.equal(p.revision,2);assert.equal(p.pagado,false);assert.equal(p.confirmado_disenador_at,null);assert.equal(p.confirmado_encargado_at,null);
+  assert.equal((await request('/api/pagos/confirmar',{method:'POST',cookie:owner,body:{items:[{id,revision:1}],confirmed:true}})).status,409);
+  assert.equal((await request('/api/miniaturas/'+id+'/pago',{method:'PUT',cookie:manager,body:base})).status,409);
+  assert.equal((await request('/api/miniaturas/'+id+'/pago',{method:'PUT',cookie:manager,body:{...base,monto:200,fecha_pago:'2026-12-01',revision:2}})).status,200);
+  assert.equal((await (await request('/api/miniaturas',{cookie:owner})).json()).data[0].pagos.revision,3);
+ });
+ await t.test('la confirmación rápida es atómica y permite confirmar varias minis desde ambas cuentas',async()=>{
+  const extra=[];
+  for(let i=0;i<3;i++){
+   const r=await request('/api/miniaturas',{method:'POST',cookie:owner,body:thumbnail({titulo:'Lote '+i})});extra.push((await r.json()).id);
+   if(i<2)assert.equal((await request('/api/miniaturas/'+extra[i]+'/pago',{method:'PUT',cookie:manager,body:{monto:100,fecha_pago:'2026-11-30'}})).status,200);
+  }
+  const body={items:extra.slice(0,2).map(id=>({id,revision:1})),confirmed:true};
+  assert.equal((await request('/api/pagos/confirmar',{method:'POST',cookie:owner,body:{...body,items:[body.items[0],{id:extra[1],revision:2}]}})).status,409);
+  assert.equal(sql.prepare('SELECT confirmado_disenador_at FROM pagos WHERE miniatura_id=?').get(extra[0]).confirmado_disenador_at,null);
+  assert.equal((await request('/api/pagos/confirmar',{method:'POST',cookie:owner,body:{...body,items:[body.items[0],{id:extra[2],revision:1}]}})).status,409);
+  assert.equal(sql.prepare('SELECT confirmado_disenador_at FROM pagos WHERE miniatura_id=?').get(extra[0]).confirmado_disenador_at,null);
+  assert.equal((await request('/api/pagos/confirmar',{method:'POST',cookie:owner,body:{...body,items:[body.items[0],body.items[0]]}})).status,400);
+  const results=await Promise.all([request('/api/pagos/confirmar',{method:'POST',cookie:owner,body}),request('/api/pagos/confirmar',{method:'POST',cookie:manager,body})]);assert.deepEqual(results.map(r=>r.status),[200,200]);
+  for(const iid of extra.slice(0,2))assert.equal(sql.prepare('SELECT pagado FROM pagos WHERE miniatura_id=?').get(iid).pagado,1);
+  for(const iid of extra)assert.equal((await request('/api/miniaturas/'+iid,{method:'DELETE',cookie:owner,body:{}})).status,200);
  });
  await t.test('editar sin imagen la conserva y reemplazar elimina la anterior',async()=>{
   assert.equal((await request('/api/miniaturas/'+id,{method:'PUT',cookie:manager,body:thumbnail()})).status,403);
@@ -107,4 +150,11 @@ test('la página no carga Supabase y el Worker solo sirve archivos públicos',as
  const html=await r.text();assert.doesNotMatch(html,/supabase|dlgSetup|btnSetup|type="email"/);assert.match(html,/name="username"/);
  assert.equal(await (await request('/app.js')).text(),readFileSync(new URL('../app.js',import.meta.url),'utf8')); 
  assert.equal((await request('/schema.sql')).status,404);assert.equal((await request('/worker.mjs')).status,404);sql.close();
+});
+
+test('la migración conserva el registro anterior y solo atribuye la confirmación que ya existía',()=>{
+ const sql=new DatabaseSync(':memory:');
+ sql.exec("CREATE TABLE pagos(miniatura_id TEXT PRIMARY KEY,monto REAL,pagado INTEGER,fecha_pago TEXT,nota TEXT,updated_at TEXT); INSERT INTO pagos VALUES('legacy',100,1,'2026-10-31','Nota','2026-10-31T12:00:00Z');");
+ sql.exec(readFileSync(new URL('../migrations/0003-payment-confirmations.sql',import.meta.url),'utf8'));
+ const row=sql.prepare('SELECT * FROM pagos').get();assert.equal(row.monto,100);assert.equal(row.nota,'Nota');assert.equal(row.pagado,0);assert.equal(row.confirmado_encargado_at,'2026-10-31T12:00:00Z');assert.equal(row.confirmado_disenador_at,null);assert.equal(row.revision,1);sql.close();
 });

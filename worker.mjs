@@ -89,7 +89,7 @@ async function saveThumbnail(request, env, u, id) {
  const bytes = await boundedBody(request, IMAGE_LIMIT+30000);
  const form = await new Response(bytes, {headers:{'Content-Type':request.headers.get('Content-Type') || ''}}).formData().catch(()=>fail(400, 'Formulario inválido.'));
  let data; try { data=JSON.parse(form.get('datos')); if(!data || typeof data!=='object' || Array.isArray(data)) fail(400,'Datos inválidos.'); } catch { fail(400, 'Datos inválidos.'); }
- const values = [text(data.cliente,'Cliente',120,true),text(data.titulo,'Título',250,true),date(data.fecha,'Fecha',true),integer(data.minutos,'Tiempo'),integer(data.revisiones,'Revisiones'),text(data.link_video,'Enlace',2000),text(data.notas,'Notas',5000)];
+ const values = [text(data.cliente,'Cliente',120,true),text(data.titulo,'Título',250,true),date(data.fecha,'Fecha',true),integer(data.minutos ?? old?.minutos,'Tiempo'),integer(data.revisiones,'Revisiones'),text(data.link_video,'Enlace',2000),text(data.notas,'Notas',5000)];
  if (values[5]) { let url; try {url=new URL(values[5]);} catch {fail(400,'Enlace inválido.');} if (!['https:','http:'].includes(url.protocol)) fail(400,'Usa un enlace HTTP o HTTPS.'); }
  const file = form.get('imagen'); const statements = []; let imageId=old?.imagen_path;
  if (file && typeof file !== 'string' && file.size) {

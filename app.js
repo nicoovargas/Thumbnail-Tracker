@@ -1,3 +1,5 @@
+import {localDateKey, selectedMonth, matchesMonth, monthLabel} from './period-filter.mjs';
+
 async function api(path, options = {}) {
   const init = { credentials: 'same-origin', ...options };
   if (init.body && !(init.body instanceof FormData)) {
@@ -22,7 +24,6 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 const money = n => '$' + Number(n || 0).toLocaleString('es-MX', { maximumFractionDigits: 2 });
 const pagoDe = m => Array.isArray(m.pagos) ? m.pagos[0] : m.pagos;
 const imgUrl = p => p ? '/api/images/' + encodeURIComponent(p) : '';
-const fmtMin = m => m == null ? '—' : m >= 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} min`;
 const fmtFecha = f => f ? new Date(f + 'T00:00:00').toLocaleDateString('es-MX', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
 const estado = m => { const p = pagoDe(m); if (!p || p.monto == null) return 'sinprecio'; return p.pagado ? 'pagada' : 'pendiente'; };
 const ETIQ = { pagada: 'Pagada', pendiente: 'Por cobrar', sinprecio: 'Sin precio' };
@@ -96,7 +97,9 @@ async function cargar() {
 
 function filtrar() {
   const q = $('#q').value.trim().toLowerCase(), c = $('#fCliente').value, e = $('#fEstado').value;
+  const month = selectedMonth($('#fPeriodo').value, $('#fMes').value);
   return items.filter(m => {
+    if (!matchesMonth(m.fecha, month)) return false;
     if (c && m.cliente !== c) return false;
     if (e && estado(m) !== e) return false;
     if (!q) return true;
@@ -116,6 +119,9 @@ function pintar() {
   $('#stPendiente').textContent = money(pend);
   $('#stSinPrecio').textContent = sin;
   $('#stTotal').textContent = verLista.length;
+  const month = selectedMonth($('#fPeriodo').value, $('#fMes').value);
+  const total = verLista.length;
+  $('#periodoResumen').textContent = `${total} ${total === 1 ? 'miniatura' : 'miniaturas'} · ${monthLabel(month)}`;
   $('#grid').innerHTML = verLista.map(m => {
     const s = estado(m), p = pagoDe(m);
     return `<button class="card" data-id="${m.id}">
@@ -128,7 +134,12 @@ function pintar() {
   vacio.hidden = verLista.length > 0;
   vacio.textContent = items.length ? 'Ninguna miniatura coincide con la búsqueda.' : (rol === 'disenador' ? 'Aún no hay miniaturas. Agrega la primera con “Nueva miniatura”.' : 'Aún no hay miniaturas registradas.');
 }
-['#q', '#fCliente', '#fEstado'].forEach(s => $(s).addEventListener('input', pintar));
+$('#fMes').value = localDateKey().slice(0, 7);
+$('#fPeriodo').addEventListener('change', () => {
+  $('#fMesLabel').hidden = $('#fPeriodo').value !== 'custom';
+  pintar();
+});
+['#q', '#fCliente', '#fEstado', '#fMes'].forEach(s => $(s).addEventListener('input', pintar));
 $('#grid').addEventListener('click', e => { const c = e.target.closest('.card'); if (c) abrirDetalle(c.dataset.id); });
 
 /* ---------- detalle y pago ---------- */
@@ -164,7 +175,6 @@ function abrirDetalle(id) {
     <div><h2>${esc(m.titulo)}</h2><span class="muted">${esc(m.cliente)}</span></div>
     <dl class="facts">
       <div><dt>Fecha</dt><dd>${fmtFecha(m.fecha)}</dd></div>
-      <div><dt>Tiempo</dt><dd>${fmtMin(m.minutos)}</dd></div>
       ${m.revisiones != null ? `<div><dt>Revisiones</dt><dd>${m.revisiones}</dd></div>` : ''}
       ${m.link_video ? `<div><dt>Video</dt><dd><a href="${esc(m.link_video)}" target="_blank" rel="noopener">Abrir en YouTube</a></dd></div>` : ''}
     </dl>
@@ -195,8 +205,8 @@ function abrirForm(m) {
   $('#btnBorrar').hidden = !m;
   form.elements.namedItem('id').value = m?.id ?? ''; form.elements.namedItem('imagen_path').value = m?.imagen_path ?? '';
   form.elements.namedItem('cliente').value = m?.cliente ?? ''; form.elements.namedItem('titulo').value = m?.titulo ?? '';
-  form.elements.namedItem('fecha').value = m?.fecha ?? new Date().toISOString().slice(0, 10);
-  form.elements.namedItem('minutos').value = m?.minutos ?? ''; form.elements.namedItem('revisiones').value = m?.revisiones ?? '';
+  form.elements.namedItem('fecha').value = m?.fecha ?? localDateKey();
+  form.elements.namedItem('revisiones').value = m?.revisiones ?? '';
   form.elements.namedItem('link_video').value = m?.link_video ?? ''; form.elements.namedItem('notas').value = m?.notas ?? '';
   verPreview(m ? imgUrl(m.imagen_path) : '');
   $('#dlgForm').showModal();
@@ -219,7 +229,7 @@ form.addEventListener('submit', async e => {
     const n = v => v === '' ? null : +v;
     const row = {
       cliente: form.elements.namedItem('cliente').value.trim(), titulo: form.elements.namedItem('titulo').value.trim(), fecha: form.elements.namedItem('fecha').value,
-      minutos: n(form.elements.namedItem('minutos').value), revisiones: n(form.elements.namedItem('revisiones').value),
+      revisiones: n(form.elements.namedItem('revisiones').value),
       link_video: form.elements.namedItem('link_video').value.trim() || null, notas: form.elements.namedItem('notas').value.trim() || null
     };
     const body = new FormData(); body.set('datos', JSON.stringify(row));
@@ -244,10 +254,10 @@ $('#btnBorrar').addEventListener('click', async () => {
 /* ---------- varios ---------- */
 document.addEventListener('click', e => { if (e.target.closest('[data-cerrar]')) e.target.closest('dialog').close(); });
 $('#btnCsv').addEventListener('click', () => {
-  const cab = ['Fecha', 'Cliente', 'Título', 'Minutos', 'Revisiones', 'Monto', 'Estado', 'Fecha de pago', 'Notas', 'Nota de pago'];
+  const cab = ['Fecha', 'Cliente', 'Título', 'Revisiones', 'Monto', 'Estado', 'Fecha de pago', 'Notas', 'Nota de pago'];
   const cel = v => { let value=String(v ?? ''); if (/^[=+@\t\r-]/.test(value)) value="'"+value; return `"${value.replace(/"/g, '""')}"`; };
   const filas = verLista.map(m => { const p = pagoDe(m) || {};
-    return [m.fecha, m.cliente, m.titulo, m.minutos, m.revisiones, p.monto, ETIQ[estado(m)], p.fecha_pago, m.notas, p.nota].map(cel).join(','); });
+    return [m.fecha, m.cliente, m.titulo, m.revisiones, p.monto, ETIQ[estado(m)], p.fecha_pago, m.notas, p.nota].map(cel).join(','); });
   const blob = new Blob(['\ufeff' + [cab.map(cel).join(','), ...filas].join('\n')], { type: 'text/csv;charset=utf-8' });
   const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: 'miniaturas.csv' });
   a.click(); URL.revokeObjectURL(a.href);

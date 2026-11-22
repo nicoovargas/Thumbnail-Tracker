@@ -4,9 +4,9 @@ Registro compartido de miniaturas de YouTube, publicado en **Cloudflare Workers 
 
 **Página:** https://thumbnail-tracker.ray-ofici4l.workers.dev/
 
-- **Diseñador:** crea, edita y elimina miniaturas con cliente, imagen, fecha, tiempo, revisiones, enlace y notas.
+- **Diseñador:** crea, edita y elimina miniaturas con cliente, imagen, fecha, revisiones, enlace y notas.
 - **Encargado:** consulta las miniaturas y registra montos, estados, fechas y notas de pago.
-- Ambos consultan totales, buscan, filtran y exportan CSV.
+- Ambos consultan totales, buscan, filtran por cliente, pago o mes y exportan CSV. El periodo ofrece Todos los meses, Este mes, Mes anterior y Elegir mes (mes y año). Los totales y el CSV usan los registros filtrados por la fecha de la miniatura, no la del pago.
 - Las dos cuentas ya están creadas. Cada persona puede cambiar su contraseña desde su sesión.
 
 ## Entrar
@@ -39,7 +39,7 @@ npm run build
 
 Las pruebas ejecutan el Worker compilado contra SQLite en memoria con una adaptación de D1. Cubren acceso con usuario, ausencia de registro público, permisos, sesiones, imágenes, validación y pagos. Son pruebas de integración de la aplicación; no sustituyen la comprobación del runtime de Cloudflare.
 
-`npm run build` genera `build/worker.mjs` con cuatro archivos públicos incorporados. La aplicación solo sirve esos archivos; no expone el SQL, las pruebas ni el código del servidor.
+`npm run build` genera `build/worker.mjs` con los archivos públicos incorporados. La aplicación solo sirve esos archivos; no expone el SQL, las pruebas ni el código del servidor.
 
 El despliegue ya tiene su base creada, su esquema aplicado y `AUTH_PEPPER` configurado como secreto de Worker. Para actualizarlo:
 

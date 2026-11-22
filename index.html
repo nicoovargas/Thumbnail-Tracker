@@ -44,6 +44,13 @@
 
   <section class="toolbar">
     <input id="q" type="search" placeholder="Buscar por título, cliente o nota…" aria-label="Buscar">
+    <select id="fPeriodo" aria-label="Periodo">
+      <option value="all">Todos los meses</option>
+      <option value="this">Este mes</option>
+      <option value="last">Mes anterior</option>
+      <option value="custom">Elegir mes…</option>
+    </select>
+    <label id="fMesLabel" class="month-filter" hidden>Mes a consultar <input id="fMes" type="month" aria-label="Mes a consultar"></label>
     <select id="fCliente" aria-label="Cliente"><option value="">Todos los clientes</option></select>
     <select id="fEstado" aria-label="Estado de pago">
       <option value="">Todas</option>
@@ -55,6 +62,7 @@
     <button id="btnNueva" class="btn primary" type="button" hidden>Nueva miniatura</button>
   </section>
 
+  <p id="periodoResumen" class="period-summary muted" role="status" aria-live="polite"></p>
   <div id="grid" class="grid"></div>
   <p id="vacio" class="muted empty" hidden></p>
 </div>
@@ -77,10 +85,7 @@
     </div>
     <datalist id="listaClientes"></datalist>
     <label>Título <input name="titulo" required></label>
-    <div class="row">
-      <label>Tiempo (minutos) <input type="number" name="minutos" min="0" inputmode="numeric"></label>
-      <label>Revisiones <small class="muted">(opcional)</small> <input type="number" name="revisiones" min="0" inputmode="numeric"></label>
-    </div>
+    <label>Revisiones <small class="muted">(opcional)</small> <input type="number" name="revisiones" min="0" inputmode="numeric"></label>
     <label>Enlace del video <small class="muted">(opcional)</small> <input type="url" name="link_video" placeholder="https://youtube.com/…"></label>
     <label>Notas <small class="muted">(opcional)</small> <textarea name="notas" rows="2"></textarea></label>
     <p id="formError" class="error" hidden></p>
@@ -104,6 +109,6 @@
  </form>
 </dialog>
 <script src="config.js"></script>
-<script src="app.js"></script>
+<script type="module" src="app.js"></script>
 </body>
 </html>

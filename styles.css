@@ -80,3 +80,8 @@ dialog::backdrop{background:rgba(10,14,24,.55)}
 #whoName{overflow-wrap:anywhere;max-width:100%}
 #userSuccess{color:var(--ok)}
 @media(max-width:650px){.top{align-items:flex-start;flex-direction:column}.who{justify-content:flex-start}.who .btn{font-size:.85rem;padding:.45rem .6rem}.grid{grid-template-columns:repeat(auto-fill,minmax(min(280px,100%),1fr))}}
+
+.toolbar{align-items:center}
+.toolbar .month-filter{display:flex;align-items:center;gap:.5rem;flex:0 1 auto;flex-wrap:wrap}
+.toolbar .month-filter input{width:170px;flex:0 1 170px;margin:0}
+.period-summary{margin:0 clamp(1rem,4vw,2.5rem) 1rem;font-size:.92rem}

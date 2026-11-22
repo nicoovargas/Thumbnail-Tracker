@@ -1,0 +1,11 @@
+import {readFile} from 'node:fs/promises';
+const config=JSON.parse(await readFile(new URL('../cloudflare-deployment.json',import.meta.url),'utf8'));
+const token=process.env.CLOUDFLARE_API_TOKEN;
+if(!token) throw new Error('Define CLOUDFLARE_API_TOKEN con permisos Workers Scripts Write para esta cuenta.');
+const metadata={main_module:'worker.mjs',compatibility_date:config.compatibility_date,keep_bindings:['secret_text'],observability:{enabled:true,logs:{enabled:true,invocation_logs:true},traces:{enabled:true,head_sampling_rate:0.1}},bindings:[{name:'DB',type:'d1',database_id:config.database_id},{name:'LOGIN_LIMIT',type:'ratelimit',namespace_id:'1001',simple:{limit:10,period:60}}]};
+const form=new FormData();
+form.append('metadata',new Blob([JSON.stringify(metadata)],{type:'application/json'}));
+form.append('worker.mjs',new Blob([await readFile(new URL('../build/worker.mjs',import.meta.url),'utf8')],{type:'application/javascript+module'}),'worker.mjs');
+const r=await fetch(`https://api.cloudflare.com/client/v4/accounts/${config.account_id}/workers/scripts/${config.worker_name}`,{method:'PUT',headers:{Authorization:`Bearer ${token}`},body:form});
+const result=await r.json(); if(!r.ok||!result.success) throw new Error(JSON.stringify(result.errors));
+console.log('Publicado: '+config.url);

@@ -1,5 +1,5 @@
-// Pega aquí los datos de tu proyecto de Supabase
-// (Project Settings → API). La "anon key" es pública por diseño:
-// la seguridad real la dan las reglas del archivo supabase-setup.sql.
-const SUPABASE_URL = 'https://TU-PROYECTO.supabase.co';
-const SUPABASE_ANON_KEY = 'TU-ANON-KEY';
+// La aplicación y la API funcionan juntas en Cloudflare.
+// Si se abre la copia de GitHub Pages, usa la dirección oficial.
+if (location.hostname.endsWith('.github.io')) {
+  location.replace('https://thumbnail-tracker.ray-ofici4l.workers.dev/' + location.hash);
+}

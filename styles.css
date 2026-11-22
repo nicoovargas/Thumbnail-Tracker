@@ -75,3 +75,8 @@ dialog::backdrop{background:rgba(10,14,24,.55)}
 .actions{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}
 .spacer{flex:1}
 @media (max-width:520px){.row{grid-template-columns:1fr}.stats div{border-right:0;border-bottom:1px solid var(--line)}}
+
+.who{flex-wrap:wrap;justify-content:flex-end}
+#whoName{overflow-wrap:anywhere;max-width:100%}
+#userSuccess{color:var(--ok)}
+@media(max-width:650px){.top{align-items:flex-start;flex-direction:column}.who{justify-content:flex-start}.who .btn{font-size:.85rem;padding:.45rem .6rem}.grid{grid-template-columns:repeat(auto-fill,minmax(min(280px,100%),1fr))}}

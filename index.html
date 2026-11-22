@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mis miniaturas</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🖼️</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- LOGIN -->
+<main id="login" class="login">
+  <form id="loginForm" class="login-box">
+    <h1>Mis miniaturas</h1>
+    <p class="muted">Inicia sesión para ver el registro.</p>
+    <label>Correo <input type="email" name="email" required autocomplete="username"></label>
+    <label>Contraseña <input type="password" name="password" required autocomplete="current-password"></label>
+    <p id="loginError" class="error" hidden></p>
+    <button class="btn primary" type="submit">Entrar</button>
+  </form>
+</main>
+
+<!-- APP -->
+<div id="app" hidden>
+  <header class="top">
+    <h1>Mis miniaturas</h1>
+    <div class="who">
+      <span id="whoName"></span>
+      <button id="btnSalir" class="btn ghost" type="button">Salir</button>
+    </div>
+  </header>
+
+  <section class="stats" aria-label="Resumen">
+    <div><b id="stPagado">$0</b><span>Pagado</span></div>
+    <div><b id="stPendiente">$0</b><span>Por cobrar</span></div>
+    <div><b id="stSinPrecio">0</b><span>Sin precio</span></div>
+    <div><b id="stTotal">0</b><span>Miniaturas</span></div>
+  </section>
+
+  <section class="toolbar">
+    <input id="q" type="search" placeholder="Buscar por título, cliente o nota…" aria-label="Buscar">
+    <select id="fCliente" aria-label="Cliente"><option value="">Todos los clientes</option></select>
+    <select id="fEstado" aria-label="Estado de pago">
+      <option value="">Todas</option>
+      <option value="pagada">Pagadas</option>
+      <option value="pendiente">Por cobrar</option>
+      <option value="sinprecio">Sin precio</option>
+    </select>
+    <button id="btnCsv" class="btn ghost" type="button">Exportar CSV</button>
+    <button id="btnNueva" class="btn primary" type="button" hidden>Nueva miniatura</button>
+  </section>
+
+  <div id="grid" class="grid"></div>
+  <p id="vacio" class="muted empty" hidden></p>
+</div>
+
+<!-- DETALLE -->
+<dialog id="dlgDetalle"><div id="detalle"></div></dialog>
+
+<!-- FORMULARIO (solo diseñador) -->
+<dialog id="dlgForm">
+  <form id="form" class="form">
+    <h2 id="formTitulo">Nueva miniatura</h2>
+    <input type="hidden" name="id"><input type="hidden" name="imagen_path">
+    <label>Imagen <small class="muted">(elige un archivo o pega con Ctrl+V)</small>
+      <input type="file" name="imagen" accept="image/*">
+    </label>
+    <img id="preview" class="preview" alt="" hidden>
+    <div class="row">
+      <label>Cliente <input name="cliente" list="listaClientes" required></label>
+      <label>Fecha <input type="date" name="fecha" required></label>
+    </div>
+    <datalist id="listaClientes"></datalist>
+    <label>Título <input name="titulo" required></label>
+    <div class="row">
+      <label>Tiempo (minutos) <input type="number" name="minutos" min="0" inputmode="numeric"></label>
+      <label>Revisiones <small class="muted">(opcional)</small> <input type="number" name="revisiones" min="0" inputmode="numeric"></label>
+    </div>
+    <label>Enlace del video <small class="muted">(opcional)</small> <input type="url" name="link_video" placeholder="https://youtube.com/…"></label>
+    <label>Notas <small class="muted">(opcional)</small> <textarea name="notas" rows="2"></textarea></label>
+    <p id="formError" class="error" hidden></p>
+    <div class="actions">
+      <button id="btnBorrar" class="btn danger" type="button" hidden>Eliminar</button>
+      <span class="spacer"></span>
+      <button class="btn ghost" type="button" data-cerrar>Cancelar</button>
+      <button class="btn primary" type="submit">Guardar</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

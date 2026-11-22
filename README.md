@@ -7,13 +7,18 @@ Registro compartido de miniaturas de YouTube, publicado en **Cloudflare Workers 
 - **Diseñador:** crea, edita y elimina miniaturas con cliente, imagen, fecha, tiempo, revisiones, enlace y notas.
 - **Encargado:** consulta las miniaturas y registra montos, estados, fechas y notas de pago.
 - Ambos consultan totales, buscan, filtran y exportan CSV.
-- El administrador crea las cuentas desde **Usuarios**. Cada persona puede cambiar su contraseña.
+- Las dos cuentas ya están creadas. Cada persona puede cambiar su contraseña desde su sesión.
 
-## Primer uso
+## Entrar
 
-Abre el enlace privado de configuración entregado al propietario y crea tu cuenta con nombre, correo y una contraseña de al menos 12 caracteres. Este paso solo se permite una vez. Después entra a **Usuarios** para crear la cuenta del encargado.
+Abre la página y escribe tu **usuario y contraseña**. No se necesita correo, registro ni código de configuración. La sesión se conserva durante 30 días o hasta pulsar **Salir**.
 
-El código de configuración no está en este repositorio. No hay registro público ni verificación por correo: el correo se utiliza como identificador para iniciar sesión. Tampoco se envían mensajes de recuperación de contraseña. Si se pierde el acceso del administrador, el propietario de Cloudflare debe gestionar la recuperación.
+| Usuario | Rol |
+| --- | --- |
+| `papayeroray` | Diseñador y administrador |
+| `icrisyt` | Encargado de pagos |
+
+Las contraseñas no están en este repositorio: la base guarda únicamente los hashes y sales. No existe registro público ni una ruta de configuración inicial. Las cuentas se aprovisionan de forma privada por el propietario de Cloudflare. Si se pierde el acceso, el propietario debe restablecerlo.
 
 ## Datos e imágenes
 
@@ -32,7 +37,7 @@ npm test
 npm run build
 ```
 
-Las pruebas ejecutan el Worker compilado contra SQLite en memoria con una adaptación de D1. Cubren cuentas, configuración única, permisos, sesiones, imágenes, validación y pagos. Son pruebas de integración de la aplicación; no sustituyen la comprobación del runtime de Cloudflare.
+Las pruebas ejecutan el Worker compilado contra SQLite en memoria con una adaptación de D1. Cubren acceso con usuario, ausencia de registro público, permisos, sesiones, imágenes, validación y pagos. Son pruebas de integración de la aplicación; no sustituyen la comprobación del runtime de Cloudflare.
 
 `npm run build` genera `build/worker.mjs` con cuatro archivos públicos incorporados. La aplicación solo sirve esos archivos; no expone el SQL, las pruebas ni el código del servidor.
 
@@ -43,6 +48,6 @@ El despliegue ya tiene su base creada, su esquema aplicado y `AUTH_PEPPER` confi
 
 El script usa la API oficial de Cloudflare, conserva los secretos existentes y habilita registros y trazas. `cloudflare-deployment.json` contiene únicamente identificadores y configuración pública. Nunca subas el token de Cloudflare ni `AUTH_PEPPER` a GitHub. No cambies `AUTH_PEPPER` sin un plan para restablecer las contraseñas, porque las cuentas existentes dependen de él.
 
-`schema.sql` contiene el esquema sin cuentas ni credenciales. Los cambios futuros del esquema requieren una migración separada: publicar código no modifica la base automáticamente.
+`schema.sql` contiene el esquema sin cuentas ni credenciales. `migrations/0002-username-login.sql` documenta el cambio aplicado a la base existente. Los cambios futuros del esquema requieren una migración separada: publicar código no modifica la base automáticamente.
 
 La copia abierta desde GitHub Pages redirige a la página oficial de Cloudflare para que las sesiones y las imágenes funcionen en el mismo dominio. Las actualizaciones en GitHub no se publican automáticamente: ejecuta el despliegue después de cambiar el código.

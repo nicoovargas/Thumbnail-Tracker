@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
-import {timingSafeEqual,createHash} from 'node:crypto';
+import {timingSafeEqual,createHash,createHmac,pbkdf2Sync,randomBytes,randomUUID} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import worker from '../build/worker.mjs';
 crypto.subtle.timingSafeEqual = (a,b) => timingSafeEqual(Buffer.from(a),Buffer.from(b));
@@ -9,7 +9,12 @@ const origin='https://tracker.test';
 const hash=v=>createHash('sha256').update(v).digest('hex');
 function fixture(){
  const sql=new DatabaseSync(':memory:'); sql.exec(readFileSync(new URL('../schema.sql',import.meta.url),'utf8'));
- sql.prepare('INSERT INTO setup(id,token_hash) VALUES(1,?)').run(hash('test-setup-code'));
+ for(const [body,rol,isAdmin] of [[ownerBody,'disenador',1],[managerBody,'encargado',0]]) {
+  const salt=randomBytes(32).toString('hex');
+  const input=createHmac('sha256','test-only-secret-not-for-deployment').update(body.password).digest();
+  const passwordHash=pbkdf2Sync(input,Buffer.from(salt,'hex'),100000,32,'sha256').toString('hex');
+  sql.prepare('INSERT INTO users(id,username,nombre,rol,is_admin,password_hash,salt) VALUES(?,?,?,?,?,?,?)').run(randomUUID(),body.username,body.nombre,rol,isAdmin,passwordHash,salt);
+ }
  const convert=row=>row && Object.fromEntries(Object.entries(row).map(([k,v])=>[k,v instanceof Uint8Array?Array.from(v):v]));
  const DB={prepare(query){return {params:[],bind(...params){this.params=params.map(v=>v instanceof ArrayBuffer?Buffer.from(v):v);return this;},async first(){return convert(sql.prepare(query).get(...this.params))||null;},async all(){return {results:sql.prepare(query).all(...this.params).map(convert),success:true};},async run(){const r=sql.prepare(query).run(...this.params);return {success:true,meta:{changes:Number(r.changes)},results:[]};}};},async batch(statements){sql.exec('BEGIN');try {const out=[];for(const s of statements) out.push(await s.run());sql.exec('COMMIT');return out;}catch(e){sql.exec('ROLLBACK');throw e;}}};
  const env={DB,AUTH_PEPPER:'test-only-secret-not-for-deployment',LOGIN_LIMIT:{async limit(){return {success:true};}}};
@@ -21,8 +26,8 @@ function fixture(){
  }
  return {sql,env,request};
 }
-const ownerBody={email:'owner@example.test',nombre:'Diseñador',password:'owner-password-12345',code:'test-setup-code'};
-const managerBody={email:'manager@example.test',nombre:'Encargado',password:'manager-password-12345',rol:'encargado'};
+const ownerBody={username:'owner_test',nombre:'Diseñador',password:'owner-password-12345'};
+const managerBody={username:'manager_test',nombre:'Encargado',password:'manager-password-12345',rol:'encargado'};
 const sessionCookie=r=>r.headers.get('Set-Cookie').split(';')[0];
 const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jq3sAAAAASUVORK5CYII=','base64');
 function thumbnail(data={},bytes=png){const f=new FormData();f.set('datos',JSON.stringify({cliente:'Cliente',titulo:'Miniatura de prueba',fecha:'2026-11-22',minutos:45,revisiones:2,notas:'Registro de prueba',...data}));if(bytes)f.set('imagen',new Blob([bytes],{type:'image/png'}),'thumb.png');return f;}
@@ -32,24 +37,21 @@ test('cuentas, permisos, imágenes y pagos',async t=>{
  await t.test('no hay acceso anónimo a registros e imágenes',async()=>{
   assert.equal((await request('/api/miniaturas')).status,401);
   assert.equal((await request('/api/images/11111111-1111-1111-1111-111111111111')).status,401);
-  assert.equal((await (await request('/api/session')).json()).needsSetup,true);
+  assert.deepEqual(await (await request('/api/session')).json(),{user:null});
  });
- await t.test('el código protege la primera cuenta y solo se puede usar una vez',async()=>{
-  assert.equal((await request('/api/setup',{method:'POST',body:{...ownerBody,code:'wrong'}})).status,403);
-  const r=await request('/api/setup',{method:'POST',body:ownerBody});assert.equal(r.status,200);owner=sessionCookie(r);
+ await t.test('las cuentas existentes entran con usuario y contraseña',async()=>{
+  assert.equal((await request('/api/login',{method:'POST',body:{email:'owner@example.test',password:ownerBody.password}})).status,401);
+  assert.equal((await request('/api/login',{method:'POST',body:{...ownerBody,password:'wrong'}})).status,401);
+  const r=await request('/api/login',{method:'POST',body:{...ownerBody,username:' OWNER_TEST '}});assert.equal(r.status,200);owner=sessionCookie(r);
   assert.match(r.headers.get('Set-Cookie'),/Secure; HttpOnly; SameSite=Strict/);
-  assert.equal((await r.json()).user.is_admin,true);
-  assert.equal((await request('/api/setup',{method:'POST',body:{...ownerBody,email:'intruder@example.test'}})).status,409);
-  const stored=sql.prepare('SELECT password_hash FROM users').get();assert.notEqual(stored.password_hash,ownerBody.password);
-  assert.equal((await (await request('/api/session',{cookie:owner})).json()).needsSetup,false);
+  const publicUser=(await r.json()).user;assert.equal(publicUser.is_admin,true);assert.equal(publicUser.username,'owner_test');assert.equal(publicUser.email,undefined);
+  const stored=sql.prepare('SELECT password_hash FROM users WHERE username=?').get('owner_test');assert.notEqual(stored.password_hash,ownerBody.password);
+  assert.equal((await request('/api/setup',{method:'POST',cookie:owner,body:{}})).status,404);
+  assert.equal((await request('/api/users',{method:'POST',cookie:owner,body:{username:'unexpected_user'}})).status,404);
  });
- await t.test('solo el administrador crea cuentas y el login conserva el rol',async()=>{
-  assert.equal((await request('/api/users',{method:'POST',cookie:owner,body:managerBody})).status,201);
-  assert.equal((await request('/api/login',{method:'POST',body:{...managerBody,password:'wrong-password'}})).status,401);
+ await t.test('la segunda cuenta conserva su rol de encargado',async()=>{
   const r=await request('/api/login',{method:'POST',body:managerBody});assert.equal(r.status,200);manager=sessionCookie(r);
   assert.equal((await r.json()).user.rol,'encargado');
-  assert.equal((await request('/api/users',{cookie:manager})).status,403);
-  assert.equal((await request('/api/users',{method:'POST',cookie:manager,body:{...managerBody,email:'third@example.test'}})).status,403);
  });
  await t.test('validación de tamaño, contenido, fechas y enlaces',async()=>{
   for(const [data,bytes,status] of [[{},Buffer.from('<svg>bad</svg>'),400],[{},new Uint8Array(750000),413],[{link_video:'javascript:alert(1)'},png,400],[{fecha:'2026-02-31'},png,400],[{minutos:-1},png,400]]){
@@ -100,15 +102,9 @@ test('cuentas, permisos, imágenes y pagos',async t=>{
  });
  sql.close();
 });
-test('la primera cuenta no se puede tomar dos veces con solicitudes concurrentes',async()=>{
- const {request,sql}=fixture();
- const responses=await Promise.all([request('/api/setup',{method:'POST',body:ownerBody}),request('/api/setup',{method:'POST',body:{...ownerBody,email:'second@example.test'}})]);
- assert.deepEqual(responses.map(r=>r.status).sort(),[200,409]);
- assert.equal(sql.prepare('SELECT count(*) n FROM users').get().n,1);sql.close();
-});
 test('la página no carga Supabase y el Worker solo sirve archivos públicos',async()=>{
  const {request,sql}=fixture();const r=await request('/');assert.equal(r.status,200);assert.match(r.headers.get('Content-Security-Policy'),/script-src 'self'/);
- assert.doesNotMatch(await r.text(),/supabase/);
+ const html=await r.text();assert.doesNotMatch(html,/supabase|dlgSetup|btnSetup|type="email"/);assert.match(html,/name="username"/);
  assert.equal(await (await request('/app.js')).text(),readFileSync(new URL('../app.js',import.meta.url),'utf8')); 
  assert.equal((await request('/schema.sql')).status,404);assert.equal((await request('/worker.mjs')).status,404);sql.close();
 });

@@ -31,14 +31,8 @@ const ETIQ = { pagada: 'Pagada', pendiente: 'Por cobrar', sinprecio: 'Sin precio
 async function iniciar() {
   try {
     const state = await api('/session');
-    $('#btnSetup').hidden = !state.needsSetup;
     if (state.user) await entrar(state.user); else mostrarLogin();
-    const params = new URLSearchParams(location.hash.slice(1));
-    if (params.has('configurar')) {
-      $('#setupCode').value = params.get('configurar');
-      history.replaceState(null, '', location.pathname + location.search);
-      if (state.needsSetup) $('#dlgSetup').showModal();
-    }
+    if (location.hash) history.replaceState(null, '', location.pathname + location.search);
   } catch (error) { mostrarLogin(); mostrarError('#loginError', error.message); }
 }
 function mostrarLogin() {
@@ -48,10 +42,8 @@ function mostrarLogin() {
 }
 async function entrar(u) {
   user = u; rol = u.rol;
-  $('#whoName').textContent = (u.nombre || u.email) + (rol === 'disenador' ? ' · Diseñador' : ' · Encargado');
+  $('#whoName').textContent = (u.nombre || u.username) + (rol === 'disenador' ? ' · Diseñador' : ' · Encargado');
   $('#btnNueva').hidden = rol !== 'disenador';
-  $('#btnUsuarios').hidden = !u.is_admin;
-  $('#btnSetup').hidden = true;
   $('#login').hidden = true; $('#app').hidden = false;
   await cargar();
 }
@@ -60,7 +52,7 @@ $('#loginForm').addEventListener('submit', async e => {
   const f = e.target, btn = f.querySelector('button[type=submit]');
   btn.disabled = true; $('#loginError').hidden = true;
   try {
-    const data = await api('/login', { method: 'POST', body: { email: f.email.value.trim(), password: f.password.value } });
+    const data = await api('/login', { method: 'POST', body: { username: f.elements.namedItem('username').value.trim(), password: f.password.value } });
     f.reset(); await entrar(data.user);
   } catch (error) { mostrarError('#loginError', error.message); }
   finally { btn.disabled = false; }
@@ -68,34 +60,6 @@ $('#loginForm').addEventListener('submit', async e => {
 $('#btnSalir').addEventListener('click', async () => {
   try { await api('/logout', {method:'POST', body:{}}); mostrarLogin(); }
   catch (error) { alert(error.message); }
-});
-$('#btnSetup').addEventListener('click', () => $('#dlgSetup').showModal());
-$('#setupForm').addEventListener('submit', async e => {
-  e.preventDefault(); const f = e.target, btn = f.querySelector('[type=submit]'); btn.disabled = true;
-  $('#setupError').hidden = true;
-  try {
-    const body = Object.fromEntries(new FormData(f));
-    const data = await api('/setup', {method:'POST', body});
-    f.reset(); $('#dlgSetup').close(); await entrar(data.user);
-  } catch (error) { mostrarError('#setupError', error.message); }
-  finally { btn.disabled = false; }
-});
-async function cargarUsuarios() {
-  const {users} = await api('/users');
-  $('#usuariosLista').innerHTML = users.map(u => `<p><b>${esc(u.nombre)}</b><br><small>${esc(u.email)} · ${u.rol === 'disenador' ? 'Diseñador' : 'Encargado'}${u.is_admin ? ' · Administrador' : ''}</small></p>`).join('');
-}
-$('#btnUsuarios').addEventListener('click', async () => {
-  $('#userError').hidden = true; $('#userSuccess').hidden = true; $('#dlgUsuarios').showModal();
-  try { await cargarUsuarios(); } catch (error) { mostrarError('#userError', error.message); }
-});
-$('#userForm').addEventListener('submit', async e => {
-  e.preventDefault(); const f=e.target, btn=f.querySelector('[type=submit]'); btn.disabled=true;
-  $('#userError').hidden=true; $('#userSuccess').hidden=true;
-  try {
-    await api('/users', {method:'POST', body:Object.fromEntries(new FormData(f))});
-    f.reset(); $('#userSuccess').hidden=false; await cargarUsuarios();
-  } catch(error) {mostrarError('#userError',error.message);}
-  finally {btn.disabled=false;}
 });
 $('#btnPassword').addEventListener('click', () => {$('#passwordError').hidden=true;$('#passwordForm').reset();$('#dlgPassword').showModal();});
 $('#passwordForm').addEventListener('submit', async e => {

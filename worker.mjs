@@ -13,7 +13,7 @@ function fail(status, message) { throw Object.assign(new Error(message), {status
 function json(data, status = 200, headers = {}) {
  return Response.json(data, {status, headers:{'Cache-Control':'no-store', ...headers}});
 }
-function publicUser(u) { return {id:u.id, email:u.email, nombre:u.nombre, rol:u.rol, is_admin:!!u.is_admin}; }
+function publicUser(u) { return {id:u.id, username:u.username, nombre:u.nombre, rol:u.rol, is_admin:!!u.is_admin}; }
 function cookie(token, age = SESSION_SECONDS) { return `${COOKIE}=${token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=${age}`; }
 async function limited(env, request, suffix) {
  const ip = request.headers.get('CF-Connecting-IP') || 'local';
@@ -32,12 +32,6 @@ function text(value, label, max, required = false) {
  const result = value.trim();
  if ((required && !result) || result.length > max) fail(400, `${label} no es válido (máximo ${max} caracteres).`);
  return result || null;
-}
-function credentials(body) {
- const email = text(body.email, 'Correo', 254, true).toLowerCase();
- if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) fail(400, 'Escribe un correo válido.');
- if (typeof body.password !== 'string' || body.password.length < 12 || body.password.length > 128) fail(400, 'La contraseña debe tener entre 12 y 128 caracteres.');
- return {email, password:body.password, nombre:text(body.nombre, 'Nombre', 80, true)};
 }
 async function bodyJson(request) {
  const bytes = await boundedBody(request, 20000);
@@ -72,7 +66,6 @@ async function newSession(env, u) {
  return json({user:publicUser(u)}, 200, {'Set-Cookie':cookie(token)});
 }
 function requireRole(u, role) { if (u.rol !== role) fail(403, 'Tu rol no permite realizar esta acción.'); }
-function requireAdmin(u) { if (!u.is_admin) fail(403, 'Solo el administrador puede gestionar cuentas.'); }
 function date(value, label, required = false) {
  const result = text(value, label, 10, required);
  if (result && (!/^\d{4}-\d{2}-\d{2}$/.test(result) || !Number.isFinite(Date.parse(result+'T00:00:00Z')) || new Date(result+'T00:00:00Z').toISOString().slice(0,10)!==result)) fail(400, `${label} no es válida.`);
@@ -124,35 +117,18 @@ async function api(request, env) {
  if (path==='/api/health' && method==='GET') {await env.DB.prepare('SELECT 1').first();return json({ok:true});}
  if (path==='/api/session' && method==='GET') {
   const u=await session(env,request);
-  const setup=await env.DB.prepare('SELECT consumed FROM setup WHERE id=1').first();
-  return json({user:u?publicUser(u):null,needsSetup:!!setup && !setup.consumed});
- }
- if (path==='/api/setup' && method==='POST') {
-  await limited(env,request,'setup'); const body=await bodyJson(request);
-  const s=await env.DB.prepare('SELECT * FROM setup WHERE id=1').first();
-  if (!s || s.consumed) fail(409,'La configuración inicial ya se completó.');
-  const hash=await digest(typeof body.code==='string'?body.code:'');
-  if (!crypto.subtle.timingSafeEqual(unhex(hash),unhex(s.token_hash))) fail(403,'El código de configuración no es válido.');
-  const {email,password,nombre}=credentials(body), salt=randomToken(), id=crypto.randomUUID();
-  const password_hash=await passwordHash(password,salt,env);
-  // Concurrent setup requests cannot create a second owner: the insert checks consumed inside the transaction.
-  const result=await env.DB.batch([
-   env.DB.prepare("INSERT INTO users(id,email,nombre,rol,is_admin,password_hash,salt) SELECT ?,?,?,'disenador',1,?,? WHERE EXISTS(SELECT 1 FROM setup WHERE id=1 AND consumed=0)").bind(id,email,nombre,password_hash,salt),
-   env.DB.prepare('UPDATE setup SET consumed=1 WHERE id=1 AND consumed=0')
-  ]);
-  if (!result[0].meta.changes) fail(409,'La configuración inicial ya se completó.');
-  return newSession(env,{id,email,nombre,rol:'disenador',is_admin:1});
+  return json({user:u?publicUser(u):null});
  }
  if (path==='/api/login' && method==='POST') {
   await limited(env,request,'login'); const body=await bodyJson(request);
-  const email=typeof body.email==='string'?body.email.trim().toLowerCase():'';
-  if (email.length>254 || typeof body.password!=='string' || body.password.length>128) fail(401,'Correo o contraseña incorrectos.');
-  const u=await env.DB.prepare('SELECT * FROM users WHERE email=?').bind(email).first(), now=Math.floor(Date.now()/1000);
+  const username=typeof body.username==='string'?body.username.trim().toLowerCase():'';
+  if (!/^[a-z0-9_]{3,32}$/.test(username) || typeof body.password!=='string' || body.password.length>128) fail(401,'Usuario o contraseña incorrectos.');
+  const u=await env.DB.prepare('SELECT * FROM users WHERE username=?').bind(username).first(), now=Math.floor(Date.now()/1000);
   if (u && u.locked_until>now) fail(429,'Demasiados intentos. Espera 15 minutos.');
   const candidate=await passwordHash(body.password,u?.salt||'0'.repeat(64),env,u?.iterations||ITERATIONS);
   if (!u || !crypto.subtle.timingSafeEqual(unhex(candidate),unhex(u.password_hash))) {
    if (u) await env.DB.prepare('UPDATE users SET failed_attempts=failed_attempts+1,locked_until=CASE WHEN failed_attempts>=9 THEN ? ELSE 0 END WHERE id=?').bind(now+900,u.id).run();
-   fail(401,'Correo o contraseña incorrectos.');
+   fail(401,'Usuario o contraseña incorrectos.');
   }
   await env.DB.prepare('UPDATE users SET failed_attempts=0,locked_until=0 WHERE id=?').bind(u.id).run();
   return newSession(env,u);
@@ -162,16 +138,6 @@ async function api(request, env) {
   const token=request.headers.get('Cookie')?.split(';').map(s=>s.trim()).find(s=>s.startsWith(COOKIE+'='))?.slice(COOKIE.length+1);
   if (token) await env.DB.prepare('DELETE FROM sessions WHERE token_hash=?').bind(await digest(token)).run();
   return json({ok:true},200,{'Set-Cookie':cookie('',0)});
- }
- if (path==='/api/users' && method==='GET') {requireAdmin(u);return json({users:(await env.DB.prepare('SELECT id,email,nombre,rol,is_admin FROM users ORDER BY created_at').all()).results});}
- if (path==='/api/users' && method==='POST') {
-  requireAdmin(u); await limited(env,request,'users'); const body=await bodyJson(request), c=credentials(body);
-  if (!['disenador','encargado'].includes(body.rol)) fail(400,'Rol inválido.');
-  const salt=randomToken(), hash=await passwordHash(c.password,salt,env);
-  if (await env.DB.prepare('SELECT id FROM users WHERE email=?').bind(c.email).first()) fail(409,'Ese correo ya tiene una cuenta.');
-  const id=crypto.randomUUID();
-  await env.DB.prepare('INSERT INTO users(id,email,nombre,rol,password_hash,salt) VALUES(?,?,?,?,?,?)').bind(id,c.email,c.nombre,body.rol,hash,salt).run();
-  return json({id},201);
  }
  if (path==='/api/password' && method==='POST') {
   await limited(env,request,'password'); const body=await bodyJson(request);

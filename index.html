@@ -92,10 +92,11 @@
   <form id="form" class="form">
     <h2 id="formTitulo">Nueva miniatura</h2>
     <input type="hidden" name="id"><input type="hidden" name="imagen_path">
-    <label>Imagen <small class="muted">(elige un archivo o pega con Ctrl+V; copia optimizada hasta 1280 px)</small>
-      <input type="file" name="imagen" accept="image/*">
+    <label>Imágenes y versiones <small class="muted">(selecciona varias o pega con Ctrl+V)</small>
+      <input type="file" name="imagen" accept="image/*" multiple>
     </label>
-    <img id="preview" class="preview" alt="" hidden>
+    <small id="versionCount" class="muted">Hasta 10 versiones. La primera será la portada.</small>
+    <div id="versionPreviews" class="version-previews"></div>
     <div class="row">
       <label>Cliente <input name="cliente" list="listaClientes" required></label>
       <label>Fecha <input type="date" name="fecha" required></label>

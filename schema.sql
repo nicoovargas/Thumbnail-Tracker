@@ -31,3 +31,10 @@ CREATE TABLE IF NOT EXISTS profile_photos (
  mime TEXT NOT NULL, data BLOB NOT NULL CHECK(length(data)<=250000)
 );
 CREATE INDEX IF NOT EXISTS miniaturas_owner_order ON miniaturas(user_id,fecha DESC,created_at DESC,id);
+
+CREATE TABLE IF NOT EXISTS miniatura_imagenes (
+ miniatura_id TEXT NOT NULL REFERENCES miniaturas(id) ON DELETE CASCADE,
+ imagen_id TEXT NOT NULL UNIQUE REFERENCES images(id),
+ orden INTEGER NOT NULL CHECK(orden>=0 AND orden<10),
+ PRIMARY KEY(miniatura_id,orden)
+);

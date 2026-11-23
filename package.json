@@ -1,5 +1,5 @@
 {
- "name": "thumbnail-tracker", "private": true, "version": "3.0.0", "type": "module",
+ "name": "thumbnail-tracker", "private": true, "version": "3.1.0", "type": "module",
  "scripts": {"build":"node scripts/build.mjs", "test":"npm run build && node --test test/*.test.mjs", "deploy":"npm run build && node scripts/deploy.mjs"},
  "engines": {"node": ">=22.13"}
 }

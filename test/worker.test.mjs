@@ -242,3 +242,66 @@ test('crear una cuenta de diseñador requiere administrador y nunca concede sus 
  const login=await signIn(request,body);assert.equal(login.user.id,newUser.id);assert.deepEqual((await (await request('/api/miniaturas',{cookie:login.cookie})).json()).data,[]);
  sql.close();
 });
+
+function multipleThumbnail(files=[png,png],data={}) {
+ const form=new FormData();
+ form.set('datos',JSON.stringify({cliente:'Cliente versiones',titulo:'Mini con alternativas',fecha:'2026-11-22',versiones:files.map((_,i)=>'new:'+i),...data}));
+ files.forEach(bytes=>form.append('imagenes',new Blob([bytes],{type:'image/png'}),'version.png'));
+ return form;
+}
+test('varias versiones comparten miniatura y pago, y mantienen el aislamiento por diseñador',async t=>{
+ const {request,sql}=fixture();const owner=await signIn(request,ownerBody),other=await signIn(request,otherDesignerBody),manager=await signIn(request,managerBody);
+ let id,images,foreignId,foreignImage;
+ const read=async()=> (await (await request('/api/miniaturas',{cookie:owner.cookie})).json()).data.find(m=>m.id===id);
+ await t.test('dos imágenes crean un solo registro y cada imagen es privada',async()=>{
+  const r=await request('/api/miniaturas',{method:'POST',cookie:owner.cookie,body:multipleThumbnail()});assert.equal(r.status,201);id=(await r.json()).id;
+  const row=await read();images=row.imagenes;assert.equal(images.length,2);assert.equal(row.imagen_path,images[0]);
+  assert.equal(sql.prepare('SELECT count(*) n FROM miniaturas').get().n,1);
+  for(const image of images){assert.equal((await request('/api/images/'+image,{cookie:owner.cookie})).status,200);assert.equal((await request('/api/images/'+image,{cookie:manager.cookie})).status,200);assert.equal((await request('/api/images/'+image,{cookie:other.cookie})).status,404);}
+  const page=(await (await request('/api/miniaturas?designer_id='+owner.user.id,{cookie:manager.cookie})).json()).data;assert.equal(page.length,1);assert.deepEqual(page[0].imagenes,images);
+  assert.equal((await request('/api/miniaturas/'+id+'/pago',{method:'PUT',cookie:manager.cookie,body:{monto:100,fecha_pago:'2026-11-30'}})).status,200);
+  for(const cookie of [owner.cookie,manager.cookie])assert.equal((await request('/api/pagos/confirmar',{method:'POST',cookie,body:{items:[{id,revision:1}],confirmed:true}})).status,200);
+ });
+ await t.test('agregar otra versión conserva el registro y su único pago',async()=>{
+  const r=await request('/api/miniaturas/'+id,{method:'PUT',cookie:owner.cookie,body:multipleThumbnail([png],{versiones:[...images,'new:0']})});assert.equal(r.status,200);
+  const row=await read();assert.equal(row.imagenes.length,3);assert.equal(row.pagos.monto,100);assert.equal(row.pagos.pagado,true);assert.equal(row.pagos.revision,1);images=row.imagenes;
+  assert.equal(sql.prepare('SELECT count(*) n FROM pagos').get().n,1);
+ });
+ await t.test('elegir portada reordena las versiones y quitar una elimina solo esa imagen',async()=>{
+  const reordered=[images[2],images[0],images[1]];
+  assert.equal((await request('/api/miniaturas/'+id,{method:'PUT',cookie:owner.cookie,body:multipleThumbnail([],{versiones:reordered})})).status,200);
+  let row=await read();assert.deepEqual(row.imagenes,reordered);assert.equal(row.imagen_path,reordered[0]);
+  images=reordered.slice(0,2);
+  assert.equal((await request('/api/miniaturas/'+id,{method:'PUT',cookie:owner.cookie,body:multipleThumbnail([],{versiones:images})})).status,200);
+  assert.equal((await request('/api/images/'+reordered[2],{cookie:owner.cookie})).status,404);
+  assert.deepEqual((await read()).imagenes,images);
+ });
+ await t.test('ningún diseñador puede editar versiones ajenas ni reutilizar sus imágenes',async()=>{
+  const r=await request('/api/miniaturas',{method:'POST',cookie:other.cookie,body:multipleThumbnail()});foreignId=(await r.json()).id;
+  foreignImage=sql.prepare('SELECT imagen_path FROM miniaturas WHERE id=?').get(foreignId).imagen_path;
+  assert.equal((await request('/api/miniaturas/'+foreignId,{method:'PUT',cookie:owner.cookie,body:multipleThumbnail()})).status,404);
+  const count=sql.prepare('SELECT count(*) n FROM images').get().n;
+  assert.equal((await request('/api/miniaturas/'+id,{method:'PUT',cookie:owner.cookie,body:multipleThumbnail([png],{versiones:[...images,foreignImage,'new:0']})})).status,400);
+  assert.equal(sql.prepare('SELECT count(*) n FROM images').get().n,count);
+  assert.equal((await request('/api/miniaturas/'+id,{method:'PUT',cookie:owner.cookie,body:multipleThumbnail([],{versiones:[images[0],images[0]]})})).status,400);
+ });
+ await t.test('archivos inválidos o demasiadas versiones no cambian lo ya guardado',async()=>{
+  const count=sql.prepare('SELECT count(*) n FROM images').get().n;
+  for(const [body,status] of [[multipleThumbnail([png,Buffer.from('<svg>bad</svg>')]),400],[multipleThumbnail(Array(11).fill(png)),400],[multipleThumbnail([new Uint8Array(700001)]),413],[multipleThumbnail([],{versiones:[]}),400]]){
+   assert.equal((await request('/api/miniaturas/'+id,{method:'PUT',cookie:owner.cookie,body})).status,status);
+   assert.deepEqual((await read()).imagenes,images);assert.equal(sql.prepare('SELECT count(*) n FROM images').get().n,count);
+  }
+ });
+ await t.test('eliminar la miniatura limpia todas sus versiones y su único pago',async()=>{
+  assert.equal((await request('/api/miniaturas/'+id,{method:'DELETE',cookie:owner.cookie,body:{}})).status,200);
+  assert.equal((await request('/api/miniaturas/'+foreignId,{method:'DELETE',cookie:other.cookie,body:{}})).status,200);
+  for(const table of ['images','miniaturas','miniatura_imagenes','pagos'])assert.equal(sql.prepare(`SELECT count(*) n FROM ${table}`).get().n,0);
+ });
+ sql.close();
+});
+test('la migración de versiones mantiene las portadas de las minis existentes',()=>{
+ const sql=new DatabaseSync(':memory:');sql.exec("PRAGMA foreign_keys=ON; CREATE TABLE images(id TEXT PRIMARY KEY); CREATE TABLE miniaturas(id TEXT PRIMARY KEY,imagen_path TEXT REFERENCES images(id)); INSERT INTO images VALUES('image-a'),('image-b'); INSERT INTO miniaturas VALUES('mini-a','image-a'),('mini-b','image-b');");
+ sql.exec(readFileSync(new URL('../migrations/0005-thumbnail-versions.sql',import.meta.url),'utf8'));
+ const rows=sql.prepare('SELECT miniatura_id,imagen_id,orden FROM miniatura_imagenes ORDER BY miniatura_id').all();
+ assert.deepEqual(rows.map(r=>({...r})),[{miniatura_id:'mini-a',imagen_id:'image-a',orden:0},{miniatura_id:'mini-b',imagen_id:'image-b',orden:0}]);sql.close();
+});

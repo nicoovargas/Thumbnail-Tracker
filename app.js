@@ -24,6 +24,10 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 const money = n => '$' + Number(n || 0).toLocaleString('es-MX', { maximumFractionDigits: 2 });
 const pagoDe = m => Array.isArray(m.pagos) ? m.pagos[0] : m.pagos;
 const imgUrl = p => p ? '/api/images/' + encodeURIComponent(p) : '';
+const versionesDe = m => Array.isArray(m.imagenes) && m.imagenes.length ? m.imagenes : [m.imagen_path];
+const versionsIcon = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3" y="3" width="14" height="14" rx="3" stroke="currentColor" stroke-width="2"/><path d="M8 21h10a3 3 0 0 0 3-3V8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+const versionsBadge = m => versionesDe(m).length > 1 ? `<span class="versions-badge">${versionsIcon}${versionesDe(m).length} versiones</span>` : '';
+
 const fmtFecha = f => f ? new Date(f + 'T00:00:00').toLocaleDateString('es-MX', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
 const estado = m => { const p = pagoDe(m); if (!p || p.monto == null) return 'sinprecio'; return p.pagado ? 'pagada' : 'pendiente'; };
 const ETIQ = { pagada: 'Pagada', pendiente: 'Por cobrar', sinprecio: 'Sin precio' };
@@ -239,7 +243,7 @@ function pintar() {
   $('#grid').innerHTML = verLista.map(m => {
     const s = estado(m), p = pagoDe(m);
     return `<button class="card" data-id="${m.id}">
-      <img class="thumb" loading="lazy" src="${esc(imgUrl(m.imagen_path))}" alt="">
+      <div class="card-cover"><img class="thumb" loading="lazy" src="${esc(imgUrl(m.imagen_path))}" alt="">${versionsBadge(m)}</div>
       <div class="info"><h3>${esc(m.titulo)}</h3>
         <div class="meta"><span>${esc(m.cliente)}</span>
         <span class="badge ${s}">${s === 'sinprecio' ? ETIQ[s] : money(p.monto)}</span></div>
@@ -285,7 +289,13 @@ function abrirDetalle(id) {
         <button class="btn ghost" type="button" data-cerrar>Cerrar</button></div>
     </div>`;
   $('#detalle').innerHTML = `
-    <img class="big" src="${esc(imgUrl(m.imagen_path))}" alt="">
+    <section id="versionGallery" class="version-gallery" aria-label="Versiones de la miniatura">
+      <div class="gallery-main">
+        <img id="versionMain" class="big" src="${esc(imgUrl(m.imagen_path))}" alt="${esc(m.titulo)} · versión 1">
+        ${versionesDe(m).length > 1 ? `<button id="versionPrev" class="gallery-arrow gallery-prev" type="button" aria-label="Versión anterior">‹</button><button id="versionNext" class="gallery-arrow gallery-next" type="button" aria-label="Versión siguiente">›</button><span id="versionPosition" class="gallery-position">1 / ${versionesDe(m).length}</span>` : ''}
+      </div>
+      ${versionesDe(m).length > 1 ? `<div id="versionTabs" class="version-tabs" role="tablist" aria-label="Elegir versión">${versionesDe(m).map((image,index)=>`<button class="version-tab" type="button" role="tab" aria-selected="${index===0}" data-version="${index}"><img src="${esc(imgUrl(image))}" alt="" loading="lazy"><span>Versión ${index+1}</span></button>`).join('')}</div>` : ''}
+    </section>
     <div><h2>${esc(m.titulo)}</h2><span class="muted">${esc(m.cliente)}</span></div>
     <dl class="facts">
       <div><dt>Fecha</dt><dd>${fmtFecha(m.fecha)}</dd></div>
@@ -305,6 +315,20 @@ function abrirDetalle(id) {
       ${rol === 'disenador' ? '<button class="btn" type="button" id="btnEditar">Editar miniatura</button>' : ''}
       <button id="btnConfirmarMini" class="btn ${miConfirmacion(p) ? 'ghost' : 'primary'}" type="button" ${p.monto == null ? 'disabled' : ''}>${miConfirmacion(p) ? 'Retirar mi confirmación' : 'Confirmar mi parte del pago'}</button>
     </section>`;
+  const galleryImages = versionesDe(m); let galleryIndex = 0;
+  function mostrarVersion(index) {
+    galleryIndex = (index + galleryImages.length) % galleryImages.length;
+    $('#versionMain').src = imgUrl(galleryImages[galleryIndex]);
+    $('#versionMain').alt = `${m.titulo} · versión ${galleryIndex+1}`;
+    if ($('#versionPosition')) $('#versionPosition').textContent = `${galleryIndex+1} / ${galleryImages.length}`;
+    $('#versionTabs')?.querySelectorAll('[data-version]').forEach(tab => tab.setAttribute('aria-selected', Number(tab.dataset.version) === galleryIndex ? 'true' : 'false'));
+  }
+  $('#versionTabs')?.addEventListener('click', e => {const tab=e.target.closest('[data-version]');if(tab)mostrarVersion(Number(tab.dataset.version));});
+  $('#versionPrev')?.addEventListener('click', () => mostrarVersion(galleryIndex-1));
+  $('#versionNext')?.addEventListener('click', () => mostrarVersion(galleryIndex+1));
+  $('#versionGallery').addEventListener('keydown', e => {
+    if (galleryImages.length > 1 && ['ArrowLeft','ArrowRight'].includes(e.key)) {e.preventDefault();mostrarVersion(galleryIndex+(e.key==='ArrowLeft'?-1:1));}
+  });
   $('#dlgDetalle').showModal();
   $('#btnEditar')?.addEventListener('click', () => { $('#dlgDetalle').close(); abrirForm(m); });
   const paymentForm = $('#formPago');
@@ -363,7 +387,7 @@ function pintarPagosRapidos() {
     return `<label class="quick-payment-item">
       <input type="checkbox" name="miniatura" value="${m.id}" ${own ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
       <img src="${esc(imgUrl(m.imagen_path))}" alt="" loading="lazy">
-      <span class="quick-payment-text"><b>${esc(m.titulo)}</b><small>${esc(m.cliente)} · ${p?.monto != null ? money(p.monto) : 'Sin monto'}</small><small>${estadoConfirmacion(p)}</small></span>
+      <span class="quick-payment-text"><b>${esc(m.titulo)}</b><small>${esc(m.cliente)} · ${p?.monto != null ? money(p.monto) : 'Sin monto'}</small><small>${estadoConfirmacion(p)}${versionesDe(m).length>1 ? ' · '+versionesDe(m).length+' versiones' : ''}</small></span>
     </label>`;
   }).join('') : '<p class="muted">No hay miniaturas en el filtro actual.</p>';
   $('#btnQuickTodas').disabled = !$('#quickList').querySelector('input:not(:disabled)');
@@ -410,6 +434,27 @@ document.addEventListener('visibilitychange',actualizarAlVolver);
 
 /* ---------- formulario de miniatura (diseñador) ---------- */
 const form = $('#form');
+let draftVersions = [];
+function limpiarVersiones() {
+  draftVersions.forEach(v => {if(v.file)URL.revokeObjectURL(v.src);}); draftVersions = [];
+}
+function pintarVersiones() {
+  $('#versionCount').textContent = `${draftVersions.length} / 10 versiones · La primera es la portada`;
+  $('#versionPreviews').innerHTML = draftVersions.map((v,index)=>`<div class="version-preview"><div class="version-preview-image"><img src="${esc(v.src)}" alt="Versión ${index+1}"><span>${index===0 ? 'Portada · V1' : 'V'+(index+1)}</span></div><div class="version-preview-actions">${index>0 ? `<button type="button" class="btn ghost" data-cover="${index}">Usar de portada</button>` : ''}<button type="button" class="btn danger" data-remove-version="${index}" aria-label="Quitar versión ${index+1}">Quitar</button></div></div>`).join('');
+}
+function agregarVersiones(files) {
+  if (draftVersions.length + files.length > 10) return mostrarError('#formError','Puedes guardar hasta 10 versiones por miniatura.');
+  if (files.some(file => !file.type.startsWith('image/'))) return mostrarError('#formError','Selecciona únicamente imágenes.');
+  if (files.some(file => file.size > 20*1024*1024)) return mostrarError('#formError','Cada imagen debe pesar menos de 20 MB.');
+  $('#formError').hidden = true;
+  draftVersions.push(...files.map(file => ({file,src:URL.createObjectURL(file)}))); pintarVersiones();
+}
+$('#versionPreviews').addEventListener('click', e => {
+  const remove=e.target.closest('[data-remove-version]'), cover=e.target.closest('[data-cover]');
+  if (remove) {const [version]=draftVersions.splice(Number(remove.dataset.removeVersion),1);if(version.file)URL.revokeObjectURL(version.src);pintarVersiones();}
+  if (cover) {const [version]=draftVersions.splice(Number(cover.dataset.cover),1);draftVersions.unshift(version);pintarVersiones();}
+});
+$('#dlgForm').addEventListener('close', limpiarVersiones);
 function abrirForm(m) {
   form.reset(); $('#formError').hidden = true;
   $('#formTitulo').textContent = m ? 'Editar miniatura' : 'Nueva miniatura';
@@ -419,32 +464,39 @@ function abrirForm(m) {
   form.elements.namedItem('fecha').value = m?.fecha ?? localDateKey();
   form.elements.namedItem('revisiones').value = m?.revisiones ?? '';
   form.elements.namedItem('link_video').value = m?.link_video ?? ''; form.elements.namedItem('notas').value = m?.notas ?? '';
-  verPreview(m ? imgUrl(m.imagen_path) : '');
+  limpiarVersiones();
+  draftVersions = m ? versionesDe(m).map(id=>({id,src:imgUrl(id)})) : [];
+  pintarVersiones();
   $('#dlgForm').showModal();
 }
-function verPreview(src) { const p = $('#preview'); p.hidden = !src; p.src = src || ''; }
 $('#btnNueva').addEventListener('click', () => abrirForm(null));
-form.elements.namedItem('imagen').addEventListener('change', () => { const f = form.elements.namedItem('imagen').files[0]; if (f) verPreview(URL.createObjectURL(f)); });
+form.elements.namedItem('imagen').addEventListener('change', e => {agregarVersiones([...e.target.files]);e.target.value='';});
 $('#dlgForm').addEventListener('paste', e => {
-  const f = [...(e.clipboardData?.files || [])].find(x => x.type.startsWith('image/'));
-  if (!f) return;
-  const dt = new DataTransfer(); dt.items.add(f); form.elements.namedItem('imagen').files = dt.files; verPreview(URL.createObjectURL(f));
+  const files = [...(e.clipboardData?.files || [])].filter(x => x.type.startsWith('image/'));
+  if (!files.length) return;
+  e.preventDefault(); agregarVersiones(files);
 });
 
 form.addEventListener('submit', async e => {
   e.preventDefault();
   const btn = form.querySelector('[type=submit]'); btn.disabled = true; $('#formError').hidden = true;
   try {
-    const file = form.elements.namedItem('imagen').files[0];
-    if (!file && !form.elements.namedItem('imagen_path').value) throw new Error('Agrega una imagen de la miniatura.');
+    if (!draftVersions.length) throw new Error('Agrega al menos una imagen de la miniatura.');
+    const pending = [...draftVersions];
     const n = v => v === '' ? null : +v;
     const row = {
       cliente: form.elements.namedItem('cliente').value.trim(), titulo: form.elements.namedItem('titulo').value.trim(), fecha: form.elements.namedItem('fecha').value,
       revisiones: n(form.elements.namedItem('revisiones').value),
       link_video: form.elements.namedItem('link_video').value.trim() || null, notas: form.elements.namedItem('notas').value.trim() || null
     };
-    const body = new FormData(); body.set('datos', JSON.stringify(row));
-    if (file) body.set('imagen', await optimizarImagen(file), 'miniatura.webp');
+    const body = new FormData(); let uploadIndex = 0; row.versiones = [];
+    for (const version of pending) {
+      if (version.file) {
+        row.versiones.push('new:'+uploadIndex++);
+        body.append('imagenes', await optimizarImagen(version.file), 'version.webp');
+      } else row.versiones.push(version.id);
+    }
+    body.set('datos', JSON.stringify(row));
     const id = form.elements.namedItem('id').value;
     await api('/miniaturas' + (id ? '/' + id : ''), {method:id?'PUT':'POST', body});
     $('#dlgForm').close(); await cargar();

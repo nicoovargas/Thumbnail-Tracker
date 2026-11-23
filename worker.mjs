@@ -5,6 +5,7 @@ const SESSION_SECONDS = 30 * 86400;
 const COOKIE = '__Host-thumbnail_session';
 const ITERATIONS = 100000;
 const IMAGE_LIMIT = 700000;
+const MAX_VERSIONS = 10;
 const hex = bytes => Array.from(new Uint8Array(bytes), b => b.toString(16).padStart(2, '0')).join('');
 const unhex = str => Uint8Array.from(str.match(/../g) || [], b => parseInt(b, 16));
 const randomToken = () => hex(crypto.getRandomValues(new Uint8Array(32)));
@@ -86,24 +87,52 @@ async function saveThumbnail(request, env, u, id) {
  requireRole(u, 'disenador');
  const old = id ? await env.DB.prepare('SELECT * FROM miniaturas WHERE id=? AND user_id=?').bind(id,u.id).first() : null;
  if (id && !old) fail(404, 'La miniatura no existe.');
- const bytes = await boundedBody(request, IMAGE_LIMIT+30000);
+ const bytes = await boundedBody(request, MAX_VERSIONS*IMAGE_LIMIT+50000);
  const form = await new Response(bytes, {headers:{'Content-Type':request.headers.get('Content-Type') || ''}}).formData().catch(()=>fail(400, 'Formulario inválido.'));
  let data; try { data=JSON.parse(form.get('datos')); if(!data || typeof data!=='object' || Array.isArray(data)) fail(400,'Datos inválidos.'); } catch { fail(400, 'Datos inválidos.'); }
  const values = [text(data.cliente,'Cliente',120,true),text(data.titulo,'Título',250,true),date(data.fecha,'Fecha',true),integer(data.minutos ?? old?.minutos,'Tiempo'),integer(data.revisiones,'Revisiones'),text(data.link_video,'Enlace',2000),text(data.notas,'Notas',5000)];
  if (values[5]) { let url; try {url=new URL(values[5]);} catch {fail(400,'Enlace inválido.');} if (!['https:','http:'].includes(url.protocol)) fail(400,'Usa un enlace HTTP o HTTPS.'); }
- const file = form.get('imagen'); const statements = []; let imageId=old?.imagen_path;
- if (file && typeof file !== 'string' && file.size) {
-  if (file.size>IMAGE_LIMIT) fail(413, 'La imagen optimizada debe pesar menos de 700 KB.');
-  const imageBytes=new Uint8Array(await file.arrayBuffer()); const mime=imageMime(imageBytes);
-  imageId=crypto.randomUUID();
-  statements.push(env.DB.prepare('INSERT INTO images(id,mime,data) VALUES(?,?,?)').bind(imageId,mime,imageBytes));
+ const oldImages=old ? (await env.DB.prepare('SELECT imagen_id FROM miniatura_imagenes WHERE miniatura_id=? ORDER BY orden').bind(id).all()).results.map(r=>r.imagen_id) : [];
+ if (old && !oldImages.length) oldImages.push(old.imagen_path);
+ const legacyFile=form.get('imagen');
+ const files=form.getAll('imagenes');
+ if (legacyFile && typeof legacyFile!=='string' && legacyFile.size) {
+  if (files.length) fail(400,'Usa un solo formato para las imágenes.');
+  files.push(legacyFile);
  }
- if (!imageId) fail(400, 'Agrega una imagen de la miniatura.');
- const itemId=id || crypto.randomUUID();
+ if (files.length>MAX_VERSIONS) fail(400,'Puedes guardar hasta 10 versiones por miniatura.');
+ let requested=data.versiones;
+ if (requested===undefined) {
+  if (legacyFile && files.length) requested=['new:0',...oldImages.slice(1)];
+  else requested=[...oldImages,...files.map((_,i)=>'new:'+i)];
+ }
+ if (!Array.isArray(requested) || !requested.length || requested.length>MAX_VERSIONS || new Set(requested).size!==requested.length) fail(400,'Agrega entre 1 y 10 imágenes distintas a la miniatura.');
+ const uploaded=new Map(); const statements=[];
+ for (let index=0;index<files.length;index++) {
+  const file=files[index];
+  if (typeof file==='string' || !file.size) fail(400,'Archivo de imagen inválido.');
+  if (file.size>IMAGE_LIMIT) fail(413,'Cada imagen optimizada debe pesar menos de 700 KB.');
+  const data=new Uint8Array(await file.arrayBuffer()),mime=imageMime(data),imageId=crypto.randomUUID();
+  uploaded.set('new:'+index,imageId);
+  statements.push(env.DB.prepare('INSERT INTO images(id,mime,data) VALUES(?,?,?)').bind(imageId,mime,data));
+ }
+ const referencedUploads=new Set();
+ const finalImages=requested.map(ref=>{
+  if (typeof ref!=='string') fail(400,'Lista de versiones inválida.');
+  if (uploaded.has(ref)) {referencedUploads.add(ref);return uploaded.get(ref);}
+  if (!oldImages.includes(ref)) fail(400,'Solo puedes conservar imágenes de esta miniatura.');
+  return ref;
+ });
+ if (referencedUploads.size!==files.length) fail(400,'Hay imágenes nuevas sin asignar a una versión.');
+ const imageId=finalImages[0],itemId=id || crypto.randomUUID();
  statements.push(old
   ? env.DB.prepare('UPDATE miniaturas SET cliente=?,titulo=?,fecha=?,minutos=?,revisiones=?,link_video=?,notas=?,imagen_path=? WHERE id=?').bind(...values,imageId,itemId)
   : env.DB.prepare('INSERT INTO miniaturas(cliente,titulo,fecha,minutos,revisiones,link_video,notas,imagen_path,id,user_id) VALUES(?,?,?,?,?,?,?,?,?,?)').bind(...values,imageId,itemId,u.id));
- if (old && old.imagen_path !== imageId) statements.push(env.DB.prepare('DELETE FROM images WHERE id=? AND NOT EXISTS(SELECT 1 FROM miniaturas WHERE imagen_path=?)').bind(old.imagen_path,old.imagen_path));
+ if (old) statements.push(env.DB.prepare('DELETE FROM miniatura_imagenes WHERE miniatura_id=?').bind(itemId));
+ finalImages.forEach((imageId,index)=>statements.push(env.DB.prepare('INSERT INTO miniatura_imagenes(miniatura_id,imagen_id,orden) VALUES(?,?,?)').bind(itemId,imageId,index)));
+ for (const removed of oldImages.filter(imageId=>!finalImages.includes(imageId))) {
+  statements.push(env.DB.prepare('DELETE FROM images WHERE id=? AND NOT EXISTS(SELECT 1 FROM miniaturas WHERE imagen_path=?) AND NOT EXISTS(SELECT 1 FROM miniatura_imagenes WHERE imagen_id=?)').bind(removed,removed,removed));
+ }
  await env.DB.batch(statements);
  return json({id:itemId}, old?200:201);
 }
@@ -199,10 +228,11 @@ async function api(request, env) {
    if (!/^[a-f0-9-]{36}$/.test(requested) || !await env.DB.prepare("SELECT id FROM users WHERE id=? AND rol='disenador'").bind(requested).first()) fail(404,'Diseñador no encontrado.');
    designerId=requested;
   } else if (u.rol!=='disenador' || (requested && requested!==u.id)) fail(404,'Diseñador no encontrado.');
-  const rows=(await env.DB.prepare('SELECT m.*,p.monto,p.pagado,p.fecha_pago,p.nota,p.updated_at,p.confirmado_disenador_at,p.confirmado_encargado_at,p.revision FROM miniaturas m LEFT JOIN pagos p ON p.miniatura_id=m.id WHERE m.user_id=? ORDER BY m.fecha DESC,m.created_at DESC,m.id LIMIT 201 OFFSET ?').bind(designerId,offset).all()).results;
+  const rows=(await env.DB.prepare('SELECT m.*,(SELECT json_group_array(imagen_id) FROM (SELECT imagen_id FROM miniatura_imagenes WHERE miniatura_id=m.id ORDER BY orden)) AS imagenes_json,p.monto,p.pagado,p.fecha_pago,p.nota,p.updated_at,p.confirmado_disenador_at,p.confirmado_encargado_at,p.revision FROM miniaturas m LEFT JOIN pagos p ON p.miniatura_id=m.id WHERE m.user_id=? ORDER BY m.fecha DESC,m.created_at DESC,m.id LIMIT 201 OFFSET ?').bind(designerId,offset).all()).results;
   const more=rows.length>200; const data=rows.slice(0,200).map(row=>{
-   const {monto,pagado,fecha_pago,nota,updated_at,confirmado_disenador_at,confirmado_encargado_at,revision,...m}=row;
-   return {...m,pagos:updated_at?{monto,pagado:monto!=null && !!confirmado_disenador_at && !!confirmado_encargado_at,fecha_pago,nota,updated_at,confirmado_disenador_at,confirmado_encargado_at,revision}:null};
+   const {monto,pagado,fecha_pago,nota,updated_at,confirmado_disenador_at,confirmado_encargado_at,revision,imagenes_json,...m}=row;
+   const imagenes=JSON.parse(imagenes_json || '[]');
+   return {...m,imagenes:imagenes.length?imagenes:[m.imagen_path],pagos:updated_at?{monto,pagado:monto!=null && !!confirmado_disenador_at && !!confirmado_encargado_at,fecha_pago,nota,updated_at,confirmado_disenador_at,confirmado_encargado_at,revision}:null};
   });
   return json({data,nextOffset:more?offset+200:null});
  }
@@ -212,9 +242,11 @@ async function api(request, env) {
  if (item && method==='DELETE') {
   requireRole(u,'disenador'); const m=await env.DB.prepare('SELECT imagen_path FROM miniaturas WHERE id=? AND user_id=?').bind(item[1],u.id).first();
   if (!m) fail(404,'La miniatura no existe.');
+  const linked=(await env.DB.prepare('SELECT imagen_id FROM miniatura_imagenes WHERE miniatura_id=?').bind(item[1]).all()).results.map(r=>r.imagen_id);
+  const images=[...new Set([m.imagen_path,...linked])];
   await env.DB.batch([
    env.DB.prepare('DELETE FROM miniaturas WHERE id=?').bind(item[1]),
-   env.DB.prepare('DELETE FROM images WHERE id=? AND NOT EXISTS(SELECT 1 FROM miniaturas WHERE imagen_path=?)').bind(m.imagen_path,m.imagen_path)
+   ...images.map(imageId=>env.DB.prepare('DELETE FROM images WHERE id=? AND NOT EXISTS(SELECT 1 FROM miniaturas WHERE imagen_path=?) AND NOT EXISTS(SELECT 1 FROM miniatura_imagenes WHERE imagen_id=?)').bind(imageId,imageId,imageId))
   ]); return json({ok:true});
  }
  if (path==='/api/pagos/confirmar' && method==='POST') {
@@ -264,7 +296,7 @@ async function api(request, env) {
  }
  const image=path.match(/^\/api\/images\/([a-f0-9-]{36})$/);
  if (image && ['GET','HEAD'].includes(method)) {
-  const row=await env.DB.prepare("SELECT i.mime,i.data FROM images i JOIN miniaturas m ON m.imagen_path=i.id WHERE i.id=? AND (?='encargado' OR m.user_id=?)").bind(image[1],u.rol,u.id).first(); if (!row) fail(404,'Imagen no encontrada.');
+  const row=await env.DB.prepare("SELECT i.mime,i.data FROM images i JOIN miniatura_imagenes v ON v.imagen_id=i.id JOIN miniaturas m ON m.id=v.miniatura_id WHERE i.id=? AND (?='encargado' OR m.user_id=?)").bind(image[1],u.rol,u.id).first(); if (!row) fail(404,'Imagen no encontrada.');
   return new Response(method==='HEAD'?null:new Uint8Array(row.data),{headers:{'Content-Type':row.mime,'Cache-Control':'private, no-store','Content-Disposition':'inline'}});
  }
  fail(404,'Ruta no encontrada.');

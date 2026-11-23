@@ -22,6 +22,14 @@ Abre la página y escribe tu **usuario y contraseña**. No se necesita correo, r
 
 Las contraseñas no están en este repositorio: la base guarda únicamente los hashes y sales. No existe registro público ni una ruta de configuración inicial. Las cuentas se aprovisionan de forma privada por el propietario de Cloudflare. Si se pierde el acceso, el propietario debe restablecerlo.
 
+## Versiones de una miniatura
+
+Cada miniatura admite de 1 a 10 imágenes. En **Nueva miniatura** o **Editar miniatura**, selecciona varios archivos o pega imágenes con Ctrl+V para añadir versiones. Las vistas previas permiten quitar una versión o usarla como portada. Los cambios solo se guardan al pulsar **Guardar**.
+
+Una insignia morada de **2 versiones**, **3 versiones**, etc. aparece sobre la portada en la lista. Al abrir la miniatura hay una galería con flechas y vistas pequeñas para elegir la versión. Todas las imágenes mantienen los permisos del diseñador propietario y el encargado.
+
+Las versiones comparten un único registro, fecha, monto y confirmaciones de pago. No aumentan el total de minis ni duplican pagos. Las miniaturas anteriores conservan su portada como primera versión. Añadir o quitar imágenes tampoco cambia el monto ni las confirmaciones ya registradas.
+
 ## Perfiles y privacidad
 
 Al entrar, Cris ve botones con las fotos y nombres de los diseñadores. Al elegir uno se muestran únicamente sus registros; **Diseñadores** vuelve a la selección. La selección no se guarda al recargar, para comenzar siempre en la pantalla de perfiles.
@@ -68,6 +76,6 @@ El despliegue ya tiene su base creada, su esquema aplicado y `AUTH_PEPPER` confi
 
 El script usa la API oficial de Cloudflare, conserva los secretos existentes y habilita registros y trazas. `cloudflare-deployment.json` contiene únicamente identificadores y configuración pública. Nunca subas el token de Cloudflare ni `AUTH_PEPPER` a GitHub. No cambies `AUTH_PEPPER` sin un plan para restablecer las contraseñas, porque las cuentas existentes dependen de él.
 
-`schema.sql` contiene el esquema sin cuentas ni credenciales. `migrations/0002-username-login.sql` documenta el acceso con usuario y `migrations/0003-payment-confirmations.sql` añade las confirmaciones y versiones de pago a la base existente. `migrations/0004-designer-profiles.sql` añade las fotos de perfil y un índice por propietario sin cambiar las miniaturas existentes. Los cambios futuros del esquema requieren una migración separada: publicar código no modifica la base automáticamente.
+`schema.sql` contiene el esquema sin cuentas ni credenciales. `migrations/0002-username-login.sql` documenta el acceso con usuario y `migrations/0003-payment-confirmations.sql` añade las confirmaciones y versiones de pago a la base existente. `migrations/0004-designer-profiles.sql` añade las fotos de perfil y un índice por propietario. `migrations/0005-thumbnail-versions.sql` agrupa las imágenes por miniatura y conserva las portadas existentes como versión inicial. Los cambios futuros del esquema requieren una migración separada: publicar código no modifica la base automáticamente.
 
 La copia abierta desde GitHub Pages redirige a la página oficial de Cloudflare para que las sesiones y las imágenes funcionen en el mismo dominio. Las actualizaciones en GitHub no se publican automáticamente: ejecuta el despliegue después de cambiar el código.

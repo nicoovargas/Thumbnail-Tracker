@@ -18,7 +18,7 @@ async function api(path, options = {}) {
   return data;
 }
 const $ = s => document.querySelector(s);
-let user = null, rol = null, items = [], verLista = [], cargando = false;
+let user = null, rol = null, items = [], verLista = [], cargando = false, selectedDesigner = null, designers = [], loadGeneration = 0, loadingScope = null, designersLoading = false;
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money = n => '$' + Number(n || 0).toLocaleString('es-MX', { maximumFractionDigits: 2 });
@@ -45,18 +45,72 @@ async function iniciar() {
     if (location.hash) history.replaceState(null, '', location.pathname + location.search);
   } catch (error) { mostrarLogin(); mostrarError('#loginError', error.message); }
 }
+function avatarHtml(person, large = false) {
+  const name = person.nombre || person.username;
+  const extra = large ? ' avatar-large' : '';
+  return person.avatar_version
+    ? `<img class="avatar${extra}" src="/api/avatars/${encodeURIComponent(person.id)}?v=${encodeURIComponent(person.avatar_version)}" alt="Foto de ${esc(name)}">`
+    : `<span class="avatar avatar-placeholder${extra}" aria-label="Sin foto de ${esc(name)}">${esc(name.slice(0, 1).toUpperCase())}</span>`;
+}
+function renderPerfil() {
+  $('#whoAvatar').innerHTML = avatarHtml(user);
+  $('#whoName').textContent = (user.nombre || user.username) + (rol === 'disenador' ? ' · Diseñador' : ' · Encargado');
+}
+function limpiarLista() {
+  loadGeneration++; cargando = false; loadingScope = null;
+  items = []; verLista = [];
+  $('#q').value = ''; $('#fEstado').value = ''; $('#fCliente').innerHTML = '<option value="">Todos los clientes</option>';
+  $('#listaClientes').replaceChildren(); pintar();
+}
 function mostrarLogin() {
-  user = null; rol = null; items = []; verLista = [];
-  $('#grid').replaceChildren(); $('#whoName').textContent = '';
-  $('#login').hidden = false; $('#app').hidden = true;
+  loadGeneration++; user = null; rol = null; items = []; verLista = []; selectedDesigner = null; designers = [];
+  cargando = false; loadingScope = null;
+  $('#grid').replaceChildren(); $('#designersGrid').replaceChildren(); $('#whoName').textContent = ''; $('#whoAvatar').replaceChildren();
+  $('#login').hidden = false; $('#app').hidden = true; $('#trackerScreen').hidden = true; $('#designersScreen').hidden = true;
+}
+async function cargarDisenadores() {
+  if (designersLoading || !user || rol !== 'encargado') return;
+  designersLoading = true; const accountId = user.id;
+  try {
+    const data = await api('/designers');
+    if (!user || user.id !== accountId || rol !== 'encargado') return;
+    designers = data.designers;
+    $('#designersGrid').innerHTML = designers.map(d => `<button class="designer-card" type="button" data-designer="${d.id}">${avatarHtml(d, true)}<b>${esc(d.nombre || d.username)}</b><small>Ver miniaturas</small></button>`).join('') || '<p class="muted">Todavía no hay diseñadores.</p>';
+    $('#designersError').hidden = true;
+    if (selectedDesigner) {
+      const updated = designers.find(d => d.id === selectedDesigner.id);
+      if (updated) { selectedDesigner = updated; $('#activeDesigner').innerHTML = avatarHtml(updated) + `<b>${esc(updated.nombre || updated.username)}</b>`; }
+    }
+  } catch (error) { if (user) mostrarError('#designersError', error.message); }
+  finally { designersLoading = false; }
+}
+async function mostrarDisenadores() {
+  selectedDesigner = null; limpiarLista();
+  $('#trackerScreen').hidden = true; $('#designersScreen').hidden = false;
+  await cargarDisenadores();
 }
 async function entrar(u) {
-  user = u; rol = u.rol;
-  $('#whoName').textContent = (u.nombre || u.username) + (rol === 'disenador' ? ' · Diseñador' : ' · Encargado');
+  user = u; rol = u.rol; selectedDesigner = null; renderPerfil();
   $('#btnNueva').hidden = rol !== 'disenador';
   $('#login').hidden = true; $('#app').hidden = false;
-  await cargar();
+  $('#designerContext').hidden = rol !== 'encargado';
+  if (rol === 'encargado') await mostrarDisenadores();
+  else {
+    selectedDesigner = u; limpiarLista();
+    $('#designersScreen').hidden = true; $('#trackerScreen').hidden = false;
+    await cargar();
+  }
 }
+$('#designersGrid').addEventListener('click', async e => {
+  const card = e.target.closest('[data-designer]'); if (!card) return;
+  const designer = designers.find(d => d.id === card.dataset.designer); if (!designer) return;
+  selectedDesigner = designer; limpiarLista();
+  $('#activeDesigner').innerHTML = avatarHtml(designer) + `<b>${esc(designer.nombre || designer.username)}</b>`;
+  $('#designersScreen').hidden = true; $('#trackerScreen').hidden = false;
+  await cargar();
+});
+$('#btnCambiarDesigner').addEventListener('click', mostrarDisenadores);
+
 $('#loginForm').addEventListener('submit', async e => {
   e.preventDefault();
   const f = e.target, btn = f.querySelector('button[type=submit]');
@@ -71,6 +125,50 @@ $('#btnSalir').addEventListener('click', async () => {
   try { await api('/logout', {method:'POST', body:{}}); mostrarLogin(); }
   catch (error) { alert(error.message); }
 });
+let profilePreviewUrl = null;
+$('#btnPerfil').addEventListener('click', () => {
+  $('#profileForm').reset(); $('#profileError').hidden = true;
+  $('#profileUsername').textContent = user.username;
+  $('#profileAvatar').innerHTML = avatarHtml(user, true);
+  $('#dlgPerfil').showModal();
+});
+$('#profilePhoto').addEventListener('change', e => {
+  if (profilePreviewUrl) URL.revokeObjectURL(profilePreviewUrl);
+  const file = e.target.files[0]; if (!file) return;
+  profilePreviewUrl = URL.createObjectURL(file);
+  $('#profileAvatar').innerHTML = `<img class="avatar avatar-large" src="${esc(profilePreviewUrl)}" alt="Vista previa de tu foto">`;
+});
+$('#dlgPerfil').addEventListener('close', () => {
+  if (profilePreviewUrl) {URL.revokeObjectURL(profilePreviewUrl); profilePreviewUrl = null;}
+  $('#profileForm').reset();
+});
+$('#profileForm').addEventListener('submit', async e => {
+  e.preventDefault(); const btn = e.target.querySelector('[type=submit]'); btn.disabled = true;
+  $('#profileError').hidden = true;
+  try {
+    const file = $('#profilePhoto').files[0]; if (!file) throw new Error('Selecciona una foto.');
+    const body = new FormData(); body.set('photo', await optimizarFotoPerfil(file), 'perfil.webp');
+    const result = await api('/profile/photo', {method:'PUT', body});
+    user = result.user; renderPerfil();
+    if (rol === 'disenador') selectedDesigner = user;
+    $('#dlgPerfil').close();
+  } catch(error) { mostrarError('#profileError', error.message); }
+  finally {btn.disabled = false;}
+});
+async function optimizarFotoPerfil(file) {
+  if (file.size > 20 * 1024 * 1024) throw new Error('Usa una foto de menos de 20 MB.');
+  let bitmap;
+  try {bitmap = await createImageBitmap(file);} catch {throw new Error('No se pudo leer la foto. Usa PNG, JPG o WebP.');}
+  try {
+    const side = Math.min(bitmap.width, bitmap.height), canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 256;
+    canvas.getContext('2d').drawImage(bitmap, (bitmap.width-side)/2, (bitmap.height-side)/2, side, side, 0, 0, 256, 256);
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/webp', 0.9));
+    if (!blob || blob.size > 250000) throw new Error('Usa una foto más pequeña.');
+    return blob;
+  } finally {bitmap.close();}
+}
+
 $('#btnPassword').addEventListener('click', () => {$('#passwordError').hidden=true;$('#passwordForm').reset();$('#dlgPassword').showModal();});
 $('#passwordForm').addEventListener('submit', async e => {
   e.preventDefault(); const f=e.target, btn=f.querySelector('[type=submit]'); btn.disabled=true;
@@ -86,18 +184,23 @@ function mostrarError(sel, msg) { const el = $(sel); el.textContent = msg; el.hi
 
 /* ---------- datos ---------- */
 async function cargar() {
-  if (cargando || !user) return;
-  cargando = true;
+  if (!user || (rol === 'encargado' && !selectedDesigner)) return;
+  const scope = rol === 'encargado' ? selectedDesigner.id : user.id;
+  if (cargando && loadingScope === scope) return;
+  cargando = true; loadingScope = scope;
+  const generation = ++loadGeneration, accountId = user.id;
   try {
     const all = []; let offset = 0;
     do {
-      const page = await api('/miniaturas?offset=' + offset);
+      const page = await api('/miniaturas?offset=' + offset + '&designer_id=' + encodeURIComponent(scope));
       all.push(...page.data); offset = page.nextOffset;
     } while (offset !== null);
+    if (!user || user.id !== accountId || generation !== loadGeneration) return;
     items = all;
   } catch (error) {
+    if (!user || user.id !== accountId || generation !== loadGeneration) return;
     $('#vacio').hidden = false; $('#vacio').textContent = 'No se pudieron cargar las miniaturas: ' + error.message; return;
-  } finally { cargando = false; }
+  } finally { if (generation === loadGeneration) cargando = false; }
   const clientes = [...new Set(items.map(m => m.cliente))].sort((a, b) => a.localeCompare(b));
   const sel = $('#fCliente'), actual = sel.value;
   sel.innerHTML = '<option value="">Todos los clientes</option>' + clientes.map(c => `<option>${esc(c)}</option>`).join('');
@@ -296,7 +399,10 @@ $('#quickForm').addEventListener('submit', async e => {
   } finally {contarSeleccionadas();}
 });
 function actualizarAlVolver() {
-  if (user && !document.hidden && !document.querySelector('dialog[open]')) cargar();
+  if (user && !document.hidden && !document.querySelector('dialog[open]')) {
+    if (rol === 'encargado' && !selectedDesigner) cargarDisenadores();
+    else cargar();
+  }
 }
 setInterval(actualizarAlVolver,15000);
 window.addEventListener('focus',actualizarAlVolver);

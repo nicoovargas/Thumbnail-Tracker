@@ -13,7 +13,7 @@ function fail(status, message) { throw Object.assign(new Error(message), {status
 function json(data, status = 200, headers = {}) {
  return Response.json(data, {status, headers:{'Cache-Control':'no-store', ...headers}});
 }
-function publicUser(u) { return {id:u.id, username:u.username, nombre:u.nombre, rol:u.rol, is_admin:!!u.is_admin}; }
+function publicUser(u) { return {id:u.id, username:u.username, nombre:u.nombre, rol:u.rol, is_admin:!!u.is_admin, avatar_version:u.avatar_version || null}; }
 function cookie(token, age = SESSION_SECONDS) { return `${COOKIE}=${token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=${age}`; }
 async function limited(env, request, suffix) {
  const ip = request.headers.get('CF-Connecting-IP') || 'local';
@@ -84,7 +84,7 @@ function imageMime(bytes) {
 }
 async function saveThumbnail(request, env, u, id) {
  requireRole(u, 'disenador');
- const old = id ? await env.DB.prepare('SELECT * FROM miniaturas WHERE id=?').bind(id).first() : null;
+ const old = id ? await env.DB.prepare('SELECT * FROM miniaturas WHERE id=? AND user_id=?').bind(id,u.id).first() : null;
  if (id && !old) fail(404, 'La miniatura no existe.');
  const bytes = await boundedBody(request, IMAGE_LIMIT+30000);
  const form = await new Response(bytes, {headers:{'Content-Type':request.headers.get('Content-Type') || ''}}).formData().catch(()=>fail(400, 'Formulario inválido.'));
@@ -150,9 +150,56 @@ async function api(request, env) {
   ]);
   return newSession(env,u);
  }
+ if (path==='/api/designers' && method==='GET') {
+  const query="SELECT id,username,nombre,rol,is_admin,avatar_version FROM users WHERE rol='disenador'";
+  const rows=u.rol==='encargado'
+   ? (await env.DB.prepare(query+' ORDER BY created_at,id').all()).results
+   : (await env.DB.prepare(query+' AND id=?').bind(u.id).all()).results;
+  return json({designers:rows.map(publicUser)});
+ }
+ if (path==='/api/designers' && method==='POST') {
+  if (!u.is_admin) fail(403,'Solo el administrador puede crear cuentas de diseñador.');
+  await limited(env,request,'create-designer'); const b=await bodyJson(request);
+  const username=text(b.username,'Usuario',32,true).toLowerCase();
+  if (!/^[a-z0-9_]{3,32}$/.test(username)) fail(400,'Usa entre 3 y 32 letras, números o guion bajo para el usuario.');
+  if (typeof b.password!=='string' || b.password.length<12 || b.password.length>128) fail(400,'La contraseña debe tener entre 12 y 128 caracteres.');
+  const nombre=text(b.nombre || username,'Nombre',80,true);
+  if (await env.DB.prepare('SELECT id FROM users WHERE username=?').bind(username).first()) fail(409,'Ese usuario ya existe.');
+  const id=crypto.randomUUID(),salt=randomToken(),hash=await passwordHash(b.password,salt,env);
+  await env.DB.prepare("INSERT INTO users(id,username,nombre,rol,is_admin,password_hash,salt) VALUES(?,?,?,'disenador',0,?,?)").bind(id,username,nombre,hash,salt).run();
+  return json({user:publicUser({id,username,nombre,rol:'disenador',is_admin:0})},201);
+ }
+ if (path==='/api/profile/photo' && method==='PUT') {
+  const bytes=await boundedBody(request,270000);
+  const form=await new Response(bytes,{headers:{'Content-Type':request.headers.get('Content-Type') || ''}}).formData().catch(()=>fail(400,'Formulario inválido.'));
+  const file=form.get('photo');
+  if (!file || typeof file==='string' || !file.size) fail(400,'Selecciona una foto de perfil.');
+  if (file.size>250000) fail(413,'La foto optimizada debe pesar menos de 250 KB.');
+  const data=new Uint8Array(await file.arrayBuffer()),mime=imageMime(data),version=crypto.randomUUID();
+  await env.DB.batch([
+   env.DB.prepare('INSERT INTO profile_photos(user_id,mime,data) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET mime=excluded.mime,data=excluded.data').bind(u.id,mime,data),
+   env.DB.prepare('UPDATE users SET avatar_version=? WHERE id=?').bind(version,u.id)
+  ]);
+  return json({user:publicUser({...u,avatar_version:version})});
+ }
+ const avatar=path.match(/^\/api\/avatars\/([a-f0-9-]{36})$/);
+ if (avatar && ['GET','HEAD'].includes(method)) {
+  const target=avatar[1];
+  if (u.rol!=='encargado' && target!==u.id) fail(404,'Foto no encontrada.');
+  const row=await env.DB.prepare('SELECT mime,data FROM profile_photos WHERE user_id=?').bind(target).first();
+  if (!row) fail(404,'Foto no encontrada.');
+  return new Response(method==='HEAD'?null:new Uint8Array(row.data),{headers:{'Content-Type':row.mime,'Cache-Control':'private, no-store','Content-Disposition':'inline'}});
+ }
  if (path==='/api/miniaturas' && method==='GET') {
   const offset=Number(url.searchParams.get('offset')||0); if (!Number.isSafeInteger(offset)||offset<0) fail(400,'Página inválida.');
-  const rows=(await env.DB.prepare('SELECT m.*,p.monto,p.pagado,p.fecha_pago,p.nota,p.updated_at,p.confirmado_disenador_at,p.confirmado_encargado_at,p.revision FROM miniaturas m LEFT JOIN pagos p ON p.miniatura_id=m.id ORDER BY m.fecha DESC,m.created_at DESC,m.id LIMIT 201 OFFSET ?').bind(offset).all()).results;
+  let designerId=u.id;
+  const requested=url.searchParams.get('designer_id');
+  if (u.rol==='encargado') {
+   if (!requested) return json({data:[],nextOffset:null,needsDesigner:true});
+   if (!/^[a-f0-9-]{36}$/.test(requested) || !await env.DB.prepare("SELECT id FROM users WHERE id=? AND rol='disenador'").bind(requested).first()) fail(404,'Diseñador no encontrado.');
+   designerId=requested;
+  } else if (u.rol!=='disenador' || (requested && requested!==u.id)) fail(404,'Diseñador no encontrado.');
+  const rows=(await env.DB.prepare('SELECT m.*,p.monto,p.pagado,p.fecha_pago,p.nota,p.updated_at,p.confirmado_disenador_at,p.confirmado_encargado_at,p.revision FROM miniaturas m LEFT JOIN pagos p ON p.miniatura_id=m.id WHERE m.user_id=? ORDER BY m.fecha DESC,m.created_at DESC,m.id LIMIT 201 OFFSET ?').bind(designerId,offset).all()).results;
   const more=rows.length>200; const data=rows.slice(0,200).map(row=>{
    const {monto,pagado,fecha_pago,nota,updated_at,confirmado_disenador_at,confirmado_encargado_at,revision,...m}=row;
    return {...m,pagos:updated_at?{monto,pagado:monto!=null && !!confirmado_disenador_at && !!confirmado_encargado_at,fecha_pago,nota,updated_at,confirmado_disenador_at,confirmado_encargado_at,revision}:null};
@@ -163,7 +210,7 @@ async function api(request, env) {
  const item=path.match(/^\/api\/miniaturas\/([a-f0-9-]{36})$/);
  if (item && method==='PUT') return saveThumbnail(request,env,u,item[1]);
  if (item && method==='DELETE') {
-  requireRole(u,'disenador'); const m=await env.DB.prepare('SELECT imagen_path FROM miniaturas WHERE id=?').bind(item[1]).first();
+  requireRole(u,'disenador'); const m=await env.DB.prepare('SELECT imagen_path FROM miniaturas WHERE id=? AND user_id=?').bind(item[1],u.id).first();
   if (!m) fail(404,'La miniatura no existe.');
   await env.DB.batch([
    env.DB.prepare('DELETE FROM miniaturas WHERE id=?').bind(item[1]),
@@ -188,9 +235,9 @@ async function api(request, env) {
    UPDATE pagos SET ${own}=CASE WHEN ?=1 THEN ? ELSE NULL END,
     pagado=CASE WHEN ?=1 AND ${other} IS NOT NULL AND monto IS NOT NULL THEN 1 ELSE 0 END,updated_at=?
    WHERE miniatura_id IN(SELECT id FROM expected) AND NOT EXISTS(
-    SELECT 1 FROM expected e LEFT JOIN pagos p ON p.miniatura_id=e.id
-    WHERE p.revision IS NULL OR p.revision<>e.version OR p.monto IS NULL
-   )`).bind(...params,b.confirmed?1:0,now,b.confirmed?1:0,now).run();
+    SELECT 1 FROM expected e LEFT JOIN pagos p ON p.miniatura_id=e.id LEFT JOIN miniaturas m ON m.id=e.id
+    WHERE p.revision IS NULL OR p.revision<>e.version OR p.monto IS NULL OR m.user_id IS NULL OR (?<>'encargado' AND m.user_id<>?)
+   )`).bind(...params,b.confirmed?1:0,now,b.confirmed?1:0,now,u.rol,u.id).run();
   if (result.meta.changes!==b.items.length) fail(409,'Algún pago cambió o todavía no tiene monto. Actualiza la lista y vuelve a seleccionar.');
   return json({ok:true,count:b.items.length});
  }
@@ -201,7 +248,7 @@ async function api(request, env) {
   if (typeof b.monto!=='number' || !Number.isFinite(b.monto)||b.monto<0||b.monto>999999999) fail(400,'Monto inválido.');
   if (b.revision!=null && (!Number.isSafeInteger(b.revision)||b.revision<1)) fail(400,'Versión de pago inválida.');
   const fecha=date(b.fecha_pago,'Fecha de pago'), nota=text(b.nota,'Nota',5000);
-  if (!await env.DB.prepare('SELECT id FROM miniaturas WHERE id=?').bind(pay[1]).first()) fail(404,'La miniatura no existe.');
+  if (!await env.DB.prepare("SELECT id FROM miniaturas WHERE id=? AND (?='encargado' OR user_id=?)").bind(pay[1],u.rol,u.id).first()) fail(404,'La miniatura no existe.');
   const changed='pagos.monto IS NOT excluded.monto OR pagos.fecha_pago IS NOT excluded.fecha_pago';
   const result=await env.DB.prepare(`INSERT INTO pagos(miniatura_id,monto,pagado,fecha_pago,nota,updated_at)
    SELECT ?,?,0,?,?,? WHERE (? IS NULL AND NOT EXISTS(SELECT 1 FROM pagos WHERE miniatura_id=?))
@@ -217,7 +264,7 @@ async function api(request, env) {
  }
  const image=path.match(/^\/api\/images\/([a-f0-9-]{36})$/);
  if (image && ['GET','HEAD'].includes(method)) {
-  const row=await env.DB.prepare('SELECT mime,data FROM images WHERE id=?').bind(image[1]).first(); if (!row) fail(404,'Imagen no encontrada.');
+  const row=await env.DB.prepare("SELECT i.mime,i.data FROM images i JOIN miniaturas m ON m.imagen_path=i.id WHERE i.id=? AND (?='encargado' OR m.user_id=?)").bind(image[1],u.rol,u.id).first(); if (!row) fail(404,'Imagen no encontrada.');
   return new Response(method==='HEAD'?null:new Uint8Array(row.data),{headers:{'Content-Type':row.mime,'Cache-Control':'private, no-store','Content-Disposition':'inline'}});
  }
  fail(404,'Ruta no encontrada.');

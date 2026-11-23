@@ -9,7 +9,7 @@ const origin='https://tracker.test';
 const hash=v=>createHash('sha256').update(v).digest('hex');
 function fixture(){
  const sql=new DatabaseSync(':memory:'); sql.exec(readFileSync(new URL('../schema.sql',import.meta.url),'utf8'));
- for(const [body,rol,isAdmin] of [[ownerBody,'disenador',1],[managerBody,'encargado',0]]) {
+ for(const [body,rol,isAdmin] of [[ownerBody,'disenador',1],[managerBody,'encargado',0],[otherDesignerBody,'disenador',0]]) {
   const salt=randomBytes(32).toString('hex');
   const input=createHmac('sha256','test-only-secret-not-for-deployment').update(body.password).digest();
   const passwordHash=pbkdf2Sync(input,Buffer.from(salt,'hex'),100000,32,'sha256').toString('hex');
@@ -27,6 +27,7 @@ function fixture(){
  return {sql,env,request};
 }
 const ownerBody={username:'owner_test',nombre:'Diseñador',password:'owner-password-12345'};
+const otherDesignerBody={username:'other_designer',nombre:'Otro diseñador',password:'other-designer-password'};
 const managerBody={username:'manager_test',nombre:'Encargado',password:'manager-password-12345',rol:'encargado'};
 const sessionCookie=r=>r.headers.get('Set-Cookie').split(';')[0];
 const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jq3sAAAAASUVORK5CYII=','base64');
@@ -34,6 +35,7 @@ function thumbnail(data={},bytes=png){const f=new FormData();f.set('datos',JSON.
 
 test('cuentas, permisos, imágenes y pagos',async t=>{
  const {request,sql,env}=fixture(); let owner,manager,id,image;
+ const ownerId=sql.prepare('SELECT id FROM users WHERE username=?').get(ownerBody.username).id;
  await t.test('no hay acceso anónimo a registros e imágenes',async()=>{
   assert.equal((await request('/api/miniaturas')).status,401);
   assert.equal((await request('/api/images/11111111-1111-1111-1111-111111111111')).status,401);
@@ -62,7 +64,7 @@ test('cuentas, permisos, imágenes y pagos',async t=>{
  await t.test('diseñador guarda miniaturas y el encargado solo puede verlas',async()=>{
   assert.equal((await request('/api/miniaturas',{method:'POST',cookie:manager,body:thumbnail()})).status,403);
   const r=await request('/api/miniaturas',{method:'POST',cookie:owner,body:thumbnail()});assert.equal(r.status,201);id=(await r.json()).id;
-  const page=await (await request('/api/miniaturas',{cookie:manager})).json();assert.equal(page.data.length,1);assert.equal(page.data[0].titulo,'Miniatura de prueba');image=page.data[0].imagen_path;
+  const page=await (await request('/api/miniaturas?designer_id='+ownerId,{cookie:manager})).json();assert.equal(page.data.length,1);assert.equal(page.data[0].titulo,'Miniatura de prueba');image=page.data[0].imagen_path;
   const response=await request('/api/images/'+image,{cookie:manager});assert.equal(response.headers.get('Content-Type'),'image/png');assert.deepEqual(Buffer.from(await response.arrayBuffer()),png);
  });
  await t.test('el administrador o encargado establece monto sin marcar el pago como completado',async()=>{
@@ -75,7 +77,7 @@ test('cuentas, permisos, imágenes y pagos',async t=>{
  await t.test('ni el administrador puede confirmar por la otra cuenta',async()=>{
   const body={items:[{id,revision:1}],confirmed:true,role:'encargado',confirmado_encargado_at:'forged'};
   for(let i=0;i<2;i++)assert.equal((await request('/api/pagos/confirmar',{method:'POST',cookie:owner,body})).status,200);
-  const p=(await (await request('/api/miniaturas',{cookie:manager})).json()).data[0].pagos;
+  const p=(await (await request('/api/miniaturas?designer_id='+ownerId,{cookie:manager})).json()).data[0].pagos;
   assert.ok(p.confirmado_disenador_at);assert.equal(p.confirmado_encargado_at,null);assert.equal(p.pagado,false);
  });
  await t.test('solo con ambas confirmaciones se paga; retirar una lo devuelve a pendiente',async()=>{
@@ -129,15 +131,15 @@ test('cuentas, permisos, imágenes y pagos',async t=>{
  await t.test('contraseña nueva revoca sesiones previas',async()=>{
   assert.equal((await request('/api/password',{method:'POST',cookie:manager,body:{current:'wrong',password:'new-manager-password'}})).status,403);
   const r=await request('/api/password',{method:'POST',cookie:manager,body:{current:managerBody.password,password:'new-manager-password'}});assert.equal(r.status,200);
-  assert.equal((await request('/api/miniaturas',{cookie:manager})).status,401);manager=sessionCookie(r);
-  assert.equal((await request('/api/miniaturas',{cookie:manager})).status,200);
+  assert.equal((await request('/api/miniaturas?designer_id='+ownerId,{cookie:manager})).status,401);manager=sessionCookie(r);
+  assert.equal((await request('/api/miniaturas?designer_id='+ownerId,{cookie:manager})).status,200);
  });
  await t.test('borrar miniatura borra pago e imagen y logout invalida sesión',async()=>{
   assert.equal((await request('/api/miniaturas/'+id,{method:'DELETE',cookie:manager,body:{}})).status,403);
   assert.equal((await request('/api/miniaturas/'+id,{method:'DELETE',cookie:owner,body:{}})).status,200);
   for(const table of ['images','miniaturas','pagos'])assert.equal(sql.prepare(`SELECT count(*) n FROM ${table}`).get().n,0);
   assert.equal((await request('/api/logout',{method:'POST',cookie:manager,body:{}})).status,200);
-  assert.equal((await request('/api/miniaturas',{cookie:manager})).status,401);
+  assert.equal((await request('/api/miniaturas?designer_id='+ownerId,{cookie:manager})).status,401);
  });
  await t.test('limitador de acceso devuelve un error claro',async()=>{
   env.LOGIN_LIMIT.limit=async()=>({success:false});
@@ -157,4 +159,86 @@ test('la migración conserva el registro anterior y solo atribuye la confirmaci�
  sql.exec("CREATE TABLE pagos(miniatura_id TEXT PRIMARY KEY,monto REAL,pagado INTEGER,fecha_pago TEXT,nota TEXT,updated_at TEXT); INSERT INTO pagos VALUES('legacy',100,1,'2026-10-31','Nota','2026-10-31T12:00:00Z');");
  sql.exec(readFileSync(new URL('../migrations/0003-payment-confirmations.sql',import.meta.url),'utf8'));
  const row=sql.prepare('SELECT * FROM pagos').get();assert.equal(row.monto,100);assert.equal(row.nota,'Nota');assert.equal(row.pagado,0);assert.equal(row.confirmado_encargado_at,'2026-10-31T12:00:00Z');assert.equal(row.confirmado_disenador_at,null);assert.equal(row.revision,1);sql.close();
+});
+
+async function signIn(request, body) {
+ const r=await request('/api/login',{method:'POST',body});assert.equal(r.status,200);
+ return {cookie:sessionCookie(r),user:(await r.json()).user};
+}
+function profilePhoto(bytes=png,extra={}) {
+ const form=new FormData();form.set('photo',new Blob([bytes],{type:'image/png'}),'photo.png');
+ for(const [key,value] of Object.entries(extra)) form.set(key,value);
+ return form;
+}
+test('los diseñadores están aislados incluso cuando uno es administrador',async()=>{
+ const {request,sql}=fixture();
+ const a=await signIn(request,ownerBody),b=await signIn(request,otherDesignerBody),manager=await signIn(request,managerBody);
+ for(const current of [a,b]){
+  const list=await (await request('/api/designers',{cookie:current.cookie})).json();assert.deepEqual(list.designers.map(d=>d.id),[current.user.id]);
+ }
+ const designers=await (await request('/api/designers',{cookie:manager.cookie})).json();assert.equal(designers.designers.length,2);assert.equal(designers.designers[0].password_hash,undefined);
+ const noSelection=await (await request('/api/miniaturas',{cookie:manager.cookie})).json();assert.deepEqual(noSelection.data,[]);assert.equal(noSelection.needsDesigner,true);
+ const minis=[];
+ for(const current of [a,b]) {
+  const r=await request('/api/miniaturas',{method:'POST',cookie:current.cookie,body:thumbnail({titulo:'Privada de '+current.user.username,user_id:current===a?b.user.id:a.user.id})});assert.equal(r.status,201);
+  const id=(await r.json()).id;minis.push(id);
+  assert.equal(sql.prepare('SELECT user_id FROM miniaturas WHERE id=?').get(id).user_id,current.user.id);
+ }
+ for(let i=0;i<2;i++) {
+  const current=[a,b][i],foreign=[a,b][1-i];
+  const mine=await (await request('/api/miniaturas',{cookie:current.cookie})).json();assert.deepEqual(mine.data.map(m=>m.id),[minis[i]]);
+  assert.equal((await request('/api/miniaturas?designer_id='+foreign.user.id,{cookie:current.cookie})).status,404);
+  const chosen=await (await request('/api/miniaturas?designer_id='+current.user.id,{cookie:manager.cookie})).json();assert.deepEqual(chosen.data.map(m=>m.id),[minis[i]]);
+  const image=chosen.data[0].imagen_path;
+  assert.equal((await request('/api/images/'+image,{cookie:foreign.cookie})).status,404);
+  assert.equal((await request('/api/images/'+image,{method:'HEAD',cookie:foreign.cookie})).status,404);
+  assert.equal((await request('/api/images/'+image,{cookie:manager.cookie})).status,200);
+  assert.equal((await request('/api/miniaturas/'+minis[i],{method:'PUT',cookie:foreign.cookie,body:thumbnail({titulo:'Intento ajeno'})})).status,404);
+  assert.equal((await request('/api/miniaturas/'+minis[i],{method:'DELETE',cookie:foreign.cookie,body:{}})).status,404);
+  assert.equal((await request('/api/miniaturas/'+minis[i]+'/pago',{method:'PUT',cookie:manager.cookie,body:{monto:100+i,fecha_pago:'2026-11-30'}})).status,200);
+ }
+ assert.equal((await request('/api/miniaturas?designer_id='+manager.user.id,{cookie:manager.cookie})).status,404);
+ assert.equal((await request('/api/miniaturas/'+minis[1]+'/pago',{method:'PUT',cookie:a.cookie,body:{monto:999,revision:1}})).status,404);
+ const mixed={items:minis.map(id=>({id,revision:1})),confirmed:true};
+ assert.equal((await request('/api/pagos/confirmar',{method:'POST',cookie:a.cookie,body:mixed})).status,409);
+ for(const id of minis) assert.equal(sql.prepare('SELECT confirmado_disenador_at FROM pagos WHERE miniatura_id=?').get(id).confirmado_disenador_at,null);
+ for(let i=0;i<2;i++) {
+  const current=[a,b][i];
+  assert.equal((await request('/api/pagos/confirmar',{method:'POST',cookie:current.cookie,body:{items:[{id:minis[1-i],revision:1}],confirmed:true}})).status,409);
+  assert.equal((await request('/api/pagos/confirmar',{method:'POST',cookie:current.cookie,body:{items:[{id:minis[i],revision:1}],confirmed:true}})).status,200);
+ }
+ assert.equal((await request('/api/pagos/confirmar',{method:'POST',cookie:manager.cookie,body:mixed})).status,200);
+ for(const current of [a,b]) {
+  const page=await (await request('/api/miniaturas',{cookie:current.cookie})).json();assert.equal(page.data.length,1);assert.equal(page.data[0].pagos.pagado,true);
+ }
+ sql.close();
+});
+test('cada cuenta cambia únicamente su foto y Cris ve las de ambos perfiles',async()=>{
+ const {request,sql}=fixture();const a=await signIn(request,ownerBody),b=await signIn(request,otherDesignerBody),manager=await signIn(request,managerBody);
+ assert.equal((await request('/api/profile/photo',{method:'PUT',body:profilePhoto()})).status,401);
+ assert.equal((await request('/api/profile/photo',{method:'PUT',cookie:a.cookie,body:profilePhoto(Buffer.from('<svg>bad</svg>'))})).status,400);
+ assert.equal((await request('/api/profile/photo',{method:'PUT',cookie:a.cookie,body:profilePhoto(new Uint8Array(260000))})).status,413);
+ const r=await request('/api/profile/photo',{method:'PUT',cookie:a.cookie,body:profilePhoto(png,{user_id:b.user.id})});assert.equal(r.status,200);
+ const updated=(await r.json()).user;assert.ok(updated.avatar_version);assert.equal(updated.id,a.user.id);
+ assert.equal(sql.prepare('SELECT count(*) n FROM profile_photos WHERE user_id=?').get(b.user.id).n,0);
+ for(const current of [b,manager])assert.equal((await request('/api/profile/photo',{method:'PUT',cookie:current.cookie,body:profilePhoto()})).status,200);
+ const old=updated.avatar_version;
+ const replaced=await request('/api/profile/photo',{method:'PUT',cookie:a.cookie,body:profilePhoto()});assert.notEqual((await replaced.json()).user.avatar_version,old);
+ const choices=(await (await request('/api/designers',{cookie:manager.cookie})).json()).designers;assert.equal(choices.length,2);assert.ok(choices.every(d=>d.avatar_version));
+ for(const current of [a,b]) {
+  const own=await request('/api/avatars/'+current.user.id,{cookie:current.cookie});assert.equal(own.status,200);assert.deepEqual(Buffer.from(await own.arrayBuffer()),png);
+  assert.equal((await request('/api/avatars/'+current.user.id,{cookie:manager.cookie})).status,200);
+  const foreign=current===a?b:a;assert.equal((await request('/api/avatars/'+current.user.id,{cookie:foreign.cookie})).status,404);
+ }
+ assert.equal((await (await request('/api/session',{cookie:a.cookie})).json()).user.avatar_version,sql.prepare('SELECT avatar_version FROM users WHERE id=?').get(a.user.id).avatar_version);
+ sql.close();
+});
+test('crear una cuenta de diseñador requiere administrador y nunca concede sus privilegios',async()=>{
+ const {request,sql}=fixture();const a=await signIn(request,ownerBody),b=await signIn(request,otherDesignerBody),manager=await signIn(request,managerBody);
+ const body={username:'new_designer',password:'new-designer-password',rol:'encargado',is_admin:1};
+ for(const current of [b,manager])assert.equal((await request('/api/designers',{method:'POST',cookie:current.cookie,body})).status,403);
+ const r=await request('/api/designers',{method:'POST',cookie:a.cookie,body});assert.equal(r.status,201);const newUser=(await r.json()).user;assert.equal(newUser.rol,'disenador');assert.equal(newUser.is_admin,false);
+ assert.equal((await request('/api/designers',{method:'POST',cookie:a.cookie,body})).status,409);
+ const login=await signIn(request,body);assert.equal(login.user.id,newUser.id);assert.deepEqual((await (await request('/api/miniaturas',{cookie:login.cookie})).json()).data,[]);
+ sql.close();
 });

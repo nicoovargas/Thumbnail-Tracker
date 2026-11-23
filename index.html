@@ -29,12 +29,24 @@
   <header class="top">
     <h1>Mis miniaturas</h1>
     <div class="who">
+      <button id="btnPerfil" class="profile-button" type="button" aria-label="Mi perfil"><span id="whoAvatar"></span></button>
       <span id="whoName"></span>
       <button id="btnPassword" class="btn ghost" type="button">Contraseña</button>
       <button id="btnSalir" class="btn ghost" type="button">Salir</button>
     </div>
   </header>
 
+  <section id="designersScreen" class="designer-screen" hidden>
+    <h2>¿De quién quieres ver las minis?</h2>
+    <p class="muted">Elige un diseñador para consultar sus miniaturas y pagos.</p>
+    <p id="designersError" class="error" hidden></p>
+    <div id="designersGrid" class="designer-grid"></div>
+  </section>
+  <section id="trackerScreen" hidden>
+  <div id="designerContext" class="designer-context" hidden>
+    <button id="btnCambiarDesigner" class="btn ghost" type="button">← Diseñadores</button>
+    <div id="activeDesigner" class="active-designer"></div>
+  </div>
   <section class="stats" aria-label="Resumen">
     <div><b id="stPagado">$0</b><span>Pagado</span></div>
     <div><b id="stPendiente">$0</b><span>Por cobrar</span></div>
@@ -69,6 +81,7 @@
     <p class="payment-rule">Para establecer una miniatura como pagada, el diseñador y el encargado deben confirmar el pago desde sus cuentas.</p>
     <button id="btnPagoRapido" class="btn primary" type="button">Confirmar pagos rápido</button>
   </footer>
+  </section>
 </div>
 
 <!-- DETALLE -->
@@ -111,6 +124,18 @@
   <div id="quickList" class="quick-payment-list"></div>
   <p id="quickError" class="error" hidden></p>
   <div class="actions quick-actions"><button class="btn ghost" type="button" data-cerrar>Cerrar</button><button id="btnQuickConfirmar" class="btn primary" type="submit" disabled>Confirmar seleccionadas (0)</button></div>
+ </form>
+</dialog>
+
+<dialog id="dlgPerfil">
+ <form id="profileForm" class="form">
+  <h2>Mi perfil</h2>
+  <div id="profileAvatar" class="profile-avatar-preview"></div>
+  <p id="profileUsername" class="muted"></p>
+  <label>Foto de perfil <input id="profilePhoto" name="photo" type="file" accept="image/png,image/jpeg,image/webp" required></label>
+  <p class="muted">Elige una imagen. Se guardará una copia cuadrada para tu foto circular.</p>
+  <p id="profileError" class="error" hidden></p>
+  <div class="actions"><button class="btn ghost" type="button" data-cerrar>Cerrar</button><button class="btn primary" type="submit">Guardar foto</button></div>
  </form>
 </dialog>
 

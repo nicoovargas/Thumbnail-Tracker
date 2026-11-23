@@ -3,7 +3,7 @@ CREATE TABLE IF NOT EXISTS users (
  id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE COLLATE NOCASE, nombre TEXT NOT NULL,
  rol TEXT NOT NULL CHECK(rol IN ('disenador','encargado')), is_admin INTEGER NOT NULL DEFAULT 0 CHECK(is_admin IN(0,1)),
  password_hash TEXT NOT NULL, salt TEXT NOT NULL, iterations INTEGER NOT NULL DEFAULT 100000,
- failed_attempts INTEGER NOT NULL DEFAULT 0, locked_until INTEGER NOT NULL DEFAULT 0,
+ failed_attempts INTEGER NOT NULL DEFAULT 0, locked_until INTEGER NOT NULL DEFAULT 0, avatar_version TEXT,
  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 CREATE TABLE IF NOT EXISTS sessions (
@@ -25,3 +25,9 @@ CREATE TABLE IF NOT EXISTS pagos (
  pagado INTEGER NOT NULL DEFAULT 0 CHECK(pagado IN(0,1)), fecha_pago TEXT, nota TEXT, updated_at TEXT NOT NULL,
  confirmado_disenador_at TEXT, confirmado_encargado_at TEXT, revision INTEGER NOT NULL DEFAULT 1
 );
+
+CREATE TABLE IF NOT EXISTS profile_photos (
+ user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+ mime TEXT NOT NULL, data BLOB NOT NULL CHECK(length(data)<=250000)
+);
+CREATE INDEX IF NOT EXISTS miniaturas_owner_order ON miniaturas(user_id,fecha DESC,created_at DESC,id);
